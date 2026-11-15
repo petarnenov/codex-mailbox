@@ -103,7 +103,8 @@ The sticky header contains five page tabs: **Overview**, **Dependencies**, **Tas
 
 - Every registry project, plus unregistered projects discovered in project snapshots, task directories, issue project mappings, and aggregate per-project statistics.
 - All available Epic/issue snapshots, local tasks even without Jira mapping, and aggregate-only reported statistics with provenance.
-- Project → Epic → issue membership, task membership, and prerequisite → dependent arrows. Cycles, unresolved dependencies and nodes outside the selected filter stay visible. Long graphs scroll.
+- Separate **Hierarchy** (Project → Epic → issue → subtask → local task) and **Execution prerequisites** views. Execution arrows run prerequisite → dependent across multiple levels. Cycles, unresolved dependencies and nodes outside the selected filter stay visible. Long graphs scroll within the map.
+- Colored completion markers distinguish **Verified complete** (green with a check), work in progress, blocked work and unverified completion. Unmet prerequisites are shown separately. A completed prerequisite does not complete the dependent; no recorded prerequisites does not prove readiness to start.
 - Unique verified issue progress, separate Jira/local statuses, project allocations, total modeled and remaining effort, explicit estimates and known measured time.
 - Empty scope remains **unavailable**, not 0% or 100%. No live data is invented. The checkbox **Explore demo** switches to isolated fixture files shipped in `demo/`; a prominent banner distinguishes them. It never writes or copies demo data to the mailbox.
 
@@ -151,6 +152,31 @@ The backend reads only these JSON paths, with a 4 MB per-file bound. Paths outsi
 
 Aliases: `issue_key`, `summary`, `affected_projects`, `local_task_ids`, `jira_status`, `verification_outcome`, `acceptance_criterion_evidence` / `acceptance_criteria_evidence`. `dependencies` is accepted as a string array equivalent to `depends_on`. Scope aliases: `key`, `scope_complete`, `in_scope_issue_keys`. External dependencies can also be objects with a `key`; these are Epic-level relationships, not automatically in-scope issues.
 
+Issue hierarchy uses `parent_key` or `parent: {"key":"STORY-1"}`. Keep the immediate story parent for subtasks. Jira `issuelinks` or normalized `jira_links` preserve **Blocks** direction: an inward issue is a prerequisite of the current issue; an outward issue is its dependent. Normalized links use `{"type":"Blocks","inward":"OTHER-1"}` or `{"type":"Blocks","outward":"OTHER-1"}`. Split and relates links never become prerequisites. Epic external objects may include `relationship: {"name":"Blocks"}` and `direction: "inward" | "outward"`; missing direction is contextual, not an inferred blocking arrow.
+
+Optional `epics/<key>/dependencies.json` records explicitly reviewed delivery milestones without editing worker-owned tasks:
+
+```json
+{
+  "nodes": [{
+    "id":"milestone:approved-release", "kind":"milestone", "label":"Approved library release",
+    "projects":["producer"], "teams":["BE"], "status":"unknown",
+    "verification":"not_verified", "evidence":["reports/release-readiness.json"]
+  }],
+  "edges": [{
+    "from":"milestone:approved-release", "to":"task:consumer-task-id", "kind":"requires",
+    "condition":"Use an approved immutable release with compatibility evidence.",
+    "evidence":["decisions/release-gate.json"]
+  }]
+}
+```
+
+Graph IDs are prefixed `project:`, `epic:`, `issue:`, `task:` or `milestone:`. Extra node declarations are milestones and cannot overwrite native records. Milestone completion requires `status: "verified"`, `verification: "passed"` and nonempty evidence; an evidence reference describing a blocker alone is insufficient. The dashboard displays recorded assertions; it does not open evidence or verify artifacts itself. Task completion still requires Done plus evidence; issue completion still requires passing local acceptance verification. Jira Closed never proves local completion. Blocker prose and task titles do not automatically create dependencies.
+
+Local tasks display a distinct short local ID, their own title and a separate Epic scope or linked Jira association. Jira records retain their actual key and issue type. The default compact map folds local work into expandable Current local work, Local work history and Other local work / audit panels. Current work requires a recorded active owning Jira status; History requires verified local completion evidence and exposes full IDs, sources and results. Unverified prerequisite context remains visible in the compact map. Show all local work restores all selected local nodes. Completing a local task does not establish completion of its Jira owner.
+
+Project, Epic and Team filters combine in both views. Prerequisite ancestors and immediate downstream neighbors outside the selection appear as labeled context and do not affect totals. Full conditions, completion status, sources and evidence remain readable below the graph. A production build configuration is not evidence that a feature has been deployed to production.
+
 `tasks/<project>/<uuid>.json`: `id`, `project` (defaults to directory name), `title`, `status`, optional `issue_key`, `epic_key`, `depends_on` task IDs, `evidence`, `updated_at`. Task `done` plus nonempty evidence marks evidenced completion. A task alone does not establish an issue's acceptance criteria.
 
 `epics/<key>/progress.json`: preserved reported fields `metrics`, `statistics`, `progress`, `totals`, `counts`, `percent`, status counts, scope completeness, `estimate`, `machine_hours`. Nested project aggregates may use `per_project`, `project_metrics`, or `projects` as an object keyed by project ID, or a list of objects with `project` / `id`. Project snapshots support the same fields. No estimate is inferred from story points or ordinary Jira hours.
@@ -196,12 +222,14 @@ Only known enumerated scope is modeled. Incomplete scope is labeled a known subs
 ## API
 
 - `GET /healthz` → `{"status":"ok"}` (process health, not a claim that mailbox data is valid).
-- `GET /api/dashboard?mode=live` → `generated_at`, `mode`, `warnings`, `projects`, `epics`, `issues`, `tasks`, `dependencies`, `task_dependencies`, `external_dependencies`, `reported_statistics`, `totals`, `estimate_method`.
+- `GET /api/dashboard?mode=live` → `generated_at`, `mode`, `warnings`, `projects`, `epics`, `issues`, `tasks`, `dependencies`, `task_dependencies`, `external_dependencies`, `graph`, `reported_statistics`, `totals`, `estimate_method`. `graph.nodes` holds typed identities, filter metadata, recorded status, completion `ready` boolean, sources and `unmet_prerequisites`. Here `ready` means verified completion evidence, **not** readiness to start. `graph.edges` separates `membership` from `requires` and retains direction, conditions and evidence.
 - Optional numeric query fields: `low`, `likely`, `high`, `review_multiplier`. Require `0 ≤ low ≤ likely ≤ high ≤ 1000` and `1 ≤ review_multiplier ≤ 1000`.
 - `mode=demo` selects the isolated demo fixture. Team/Project/Epic filtering is browser-local; API returns the full snapshot.
 - Errors: `{"error":{"code":"...","message":"..."}}`. Mutations return 405. Static assets are allowlisted. No arbitrary file-serving endpoint.
 
 ## Validation
+
+The mailbox orchestrator's optional local CLI `dispatch_gate.py` reuses this graph projection for dependency eligibility and immutable execution receipts. It is not an HTTP mutation endpoint and is not invoked by the read-only web server. Its wrapper and mandatory worker protocol live in the containing mailbox workspace; no mailbox snapshots are packaged into the application repository. Run its tests with the normal test/coverage workflow.
 
 ```sh
 make setup
@@ -217,3 +245,30 @@ Tests use temporary directories and synthetic data; they never mutate live mailb
 ## License
 
 [MIT](LICENSE) — copyright 2026 Petar Nenov.
+
+
+### Implementation process orientation
+
+The Overview adds process-stage counts, Now / Blocked / Next triage, a verification queue and changes since the previous comparable browser snapshot. Jira keys open a shared detail panel with the recorded baseline, remaining work, explicit owner, original acceptance criteria, per-criterion evidence and revision trace. Missing ownership, criterion coverage and revision evidence remain unknown. The source Jira status stays independent from the local process stage and blockers.
+
+Process stages are `uninvestigated`, `investigating`, `ready`, `implementation`, `review`, `verification`, `complete` and `unknown`. A partial baseline means an initial assessment exists and investigation is incomplete; a reported complete baseline is a verification candidate. Only the existing strict issue verification permits Complete. Ready and Next are recorded stages/suggestions, not permission to execute: dependency, ownership, loop and quota checks still apply.
+
+Search combines with Project / Epic / Team. The URL retains filters, search, view, graph mode and focused issue; unavailable values must be explicitly reported. Graph focus uses canonical relationships and keeps external context separate from scoped totals. Freshness labels distinguish source Jira updates, worker reports (or explicitly labeled linked-task update proxies), evidence times and dashboard read time; missing, invalid and future timestamps do not imply freshness or worker availability.
+
+Changes are browser-local comparisons, separated by live/demo mode and comparable filter/search scope. They report observed completion, stage, blocker and scope changes with previous metadata for removals. The first visit has no comparison baseline. Storage failures and incompatible data are explicit; opening details or changing graph presentation does not consume a comparison. The server and mailbox stay read-only.
+
+
+Issue records may provide an explicit `delivery` object. Supported fields include `stage`, `existing_work`, `remainder`, `owner`, `next_action`, `criteria` (`text`, `status`, `evidence`), `verification` (`verifier`, `evidence`, `reason`), `trace` and `freshness`. Trace is keyed by `written`, `reviewed`, `integrated` and `tested_integrated`; each entry supplies `revision`, `evidence` and optional `at`. Integrated verification requires a recorded integrated revision and a matching tested revision, both with evidence. A trace claim never changes issue verification or proves deployment. Structured criterion results require their own evidence to be displayed as passed; original acceptance text remains available when structured coverage is absent.
+
+The projection also preserves existing `baseline_status`, `baseline_assessment`, `acceptance_criteria` and explicit ownership/verification timestamps. Source metadata conflicts remain visible instead of selecting the most advanced claim. Producers should record actual outcomes and artifact references in their owned coordination records; the dashboard does not invent or write those records.
+
+Process-data conflicts are returned in `delivery_warnings`, separately from authoritative graph warnings; they do not grant or remove dispatch eligibility. Changes to the display helper still invalidate old dispatch receipts through the code fingerprint.
+
+
+### Ownership roles
+
+Jira assignee, implementation owner and recorded execution owner are separate roles. An explicitly fetched `jira_assignee: null` means **Unassigned in Jira**; an absent assignee field means **Not loaded**, while malformed or contradictory ownership metadata means **Conflicting records**. The assignee retrieval timestamp and source describe this field snapshot independently from the issue status/acceptance snapshot. Jira ownership is never inferred from an Epic parent, a local agent or affected projects.
+
+`implementation_owner` identifies the explicitly recorded implementation responsibility. Execution ownership comes from linked local tasks' `owner` or `owner_session_id`, with task/project/source context. Multiple recorded workers remain inspectable; a recorded session ID is not proof that the worker is currently active. Missing local responsibility is **Not recorded**, rather than a claim that nobody owns the Jira issue. Legacy local `owner` records remain local ownership and never become a Jira assignee.
+
+Local enrichment may fetch only ownership fields read-only from Jira and preserve the imported issue scope, statuses, parents and acceptance criteria. Such a partial refresh does not make the full Jira snapshot newer and never changes Jira assignment.

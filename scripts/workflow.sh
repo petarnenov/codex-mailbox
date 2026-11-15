@@ -132,7 +132,7 @@ case "${1:-help}" in
             --mount "type=bind,source=$APP_DIR,target=/workspace,readonly" \
             --mount "type=bind,source=$APP_DIR/.coverage-output,target=/coverage" \
             --workdir /workspace "$TOOLS_IMAGE" sh -c \
-            'python -B -m coverage run --branch --source=server -m unittest discover -s tests -v && python -B -m coverage report -m && python -B -m coverage json -o /coverage/coverage.json && python -B -m coverage html -d /coverage/html'
+            'python -B -m coverage run --branch --source=server,dependency_graph,dispatch_gate,delivery_process -m unittest discover -s tests -v && python -B -m coverage report -m && python -B -m coverage json -o /coverage/coverage.json && python -B -m coverage html -d /coverage/html'
         ;;
     *) fail 'Unknown command. Run make help.' ;;
 esac

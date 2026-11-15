@@ -9,6 +9,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from dependency_graph import build_graph
+from delivery_process import project_delivery
+
 ROOT = Path(__file__).parent
 STATUSES = ('pending', 'in_progress', 'blocked', 'awaiting_verification', 'verified_done')
 
@@ -84,6 +87,21 @@ def estimate_range(value):
 
 def evidence(value):
     return bool(value.get('evidence') or value.get('acceptance_criterion_evidence') or value.get('acceptance_criteria_evidence'))
+
+
+def evidence_refs(record):
+    """Preserve strings in structured worker evidence as well as path lists."""
+    pending = [record.get(key) for key in ('evidence', 'acceptance_criterion_evidence', 'acceptance_criteria_evidence')]
+    result = []
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str) and value.strip():
+            result.append(value)
+        elif isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return sorted(set(result))
 
 
 def verification_passed(value):
@@ -194,7 +212,10 @@ def build_dashboard(root, model=None, mode='live'):
                       'blockers': strings(data.get('blockers')), 'source': str(path.relative_to(root)),
                       'depends_on': strings(data.get('depends_on')),
                       'evidenced': data.get('status') == 'done' and evidence(data),
+                      'evidence': evidence_refs(data),
                       'updated_at': data.get('updated_at'),
+                      'owner': data.get('owner'),
+                      'owner_session_id': data.get('owner_session_id'),
                       'teams': record_teams(data, projects[pid]['teams']),
                       '_inherit_teams': explicit_teams(data) is None and title_teams(data) is None})
     task_map = {t['id']: t for t in tasks}
@@ -213,7 +234,7 @@ def build_dashboard(root, model=None, mode='live'):
                 if isinstance(dependency, str):
                     external.append({'key': dependency, 'epic': key})
                 elif isinstance(dependency, dict) and isinstance(dependency.get('key'), str):
-                    external.append({'key': dependency['key'], 'epic': key})
+                    external.append({**dependency, 'epic': key})
         complete = scope.get('enumeration_complete', scope.get('scope_complete')) is True
         declared = strings(scope.get('issue_keys', scope.get('in_scope_issue_keys', scope.get('issues'))))
         issue_path = folder / 'issues.json'
@@ -234,6 +255,8 @@ def build_dashboard(root, model=None, mode='live'):
             warnings.append(f'{key}: missing issue records: {", ".join(sorted(missing))}')
             complete = False
         epics.append({'key': key, 'title': scope.get('title', scope.get('summary', key)),
+                      'issue_type': scope.get('source_issue_type', 'Epic'),
+                      'source_status': scope.get('source_status', 'Unknown'),
                       'scope_complete': complete, 'issue_keys': sorted(set(actual_keys + declared) - {None}),
                       'updated_at': scope.get('latest_sync_at', scope.get('updated_at'))})
         for item in items:
@@ -275,9 +298,11 @@ def build_dashboard(root, model=None, mode='live'):
         if isinstance(source_status, dict):
             source_status = source_status.get('name', 'Unknown')
         normalized = {'key': key, 'title': item.get('title', item.get('summary', key)), 'epic_keys': [item['_epic']],
+                      'issue_type': item.get('issue_type'),
                       'projects': pids, 'local_status': status, 'recorded_local_status': item.get('local_status', 'pending'),
                       'recorded_verification_reason': item.get('verification', {}).get('reason', '') if isinstance(item.get('verification'), dict) else '',
                       'sources': strings(item.get('_source')), 'updated_at': item.get('updated_at'),
+                      'evidence': evidence_refs(item),
                       'source_status': str(source_status), 'verified': verified,
                       'dependencies': strings(item.get('depends_on', item.get('dependencies'))), 'task_ids': linked,
                       'estimate': estimate_range(item.get('codex_estimate_hours')),
@@ -288,7 +313,7 @@ def build_dashboard(root, model=None, mode='live'):
             issues[key] = normalized
         else:
             previous = issues[key]
-            for field in ('projects', 'epic_keys', 'dependencies', 'task_ids', 'teams', 'sources'):
+            for field in ('projects', 'epic_keys', 'dependencies', 'task_ids', 'teams', 'sources', 'evidence'):
                 previous[field] = sorted(set(previous[field] + normalized[field]))
             if any(previous[k] != normalized[k] for k in ('local_status', 'verified', 'estimate', 'actual_machine_hours')):
                 previous.update(verified=False, local_status='awaiting_verification', conflict=True, estimate=None, actual_machine_hours=None)
@@ -356,9 +381,14 @@ def build_dashboard(root, model=None, mode='live'):
         p['allocated_estimate'] = {k: round(v, 2) for k, v in allocated.items()} if selected else None
     dependencies = [{'from': dep, 'to': i['key'], 'kind': 'depends_on', 'unresolved': dep not in issues}
                     for i in issue_list for dep in i['dependencies']]
+    graph = build_graph(root, list(projects.values()), epics, issue_list, tasks, raw_issues, external, read_json, warnings)
+    delivery_warnings = []
+    project_delivery(issue_list, tasks, raw_issues, graph, delivery_warnings)
     return {'generated_at': datetime.now(timezone.utc).isoformat(), 'mode': mode, 'warnings': warnings,
+            'delivery_warnings': delivery_warnings,
             'projects': sorted(projects.values(), key=lambda p: p['name']), 'epics': epics, 'issues': issue_list,
             'tasks': tasks, 'dependencies': dependencies, 'external_dependencies': external,
+            'graph': graph,
             'task_dependencies': [{'from': dep, 'to': t['id'], 'kind': 'task_dependency', 'unresolved': dep not in task_map} for t in tasks for dep in t['depends_on']],
             'reported_statistics': reported,
             'totals': metrics(issue_list, complete, model), 'estimate_method': model}

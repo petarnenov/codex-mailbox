@@ -2,6 +2,11 @@
 const $ = id => document.getElementById(id);
 let data;
 let request = 0;
+let focusId = '';
+let comparison = null;
+let detailReturnFocus = null;
+let urlStateErrors = [];
+const processStages={uninvestigated:'Uninvestigated',investigating:'Investigating',ready:'Ready for gated execution',implementation:'Implementation',review:'Review',verification:'Verification',complete:'Verified complete',unknown:'Stage unknown'};
 const labels = {pending:'Pending',in_progress:'In progress',blocked:'Blocked',awaiting_verification:'Awaiting verification',verified_done:'Verified done',done:'Done'};
 function el(tag, text, cls) { const n=document.createElement(tag); if(text!==undefined)n.textContent=text; if(cls)n.className=cls; return n; }
 function moneyless(n) { return n===null || n===undefined ? 'Unavailable' : Number(n).toLocaleString(undefined,{maximumFractionDigits:2}); }
@@ -17,15 +22,120 @@ function sumMetrics(items,complete) {
 }
 function matchesTeam(record,team) { const teams=record.teams||[];return !team||(team==='unassigned'?teams.length===0:teams.includes(team)); }
 function selection() {
- const p=$('project').value,e=$('epic').value,team=$('team').value;
- const issues=data.issues.filter(i=>(!p||i.projects.includes(p))&&(!e||i.epic_keys.includes(e))&&matchesTeam(i,team));
- const tasks=data.tasks.filter(t=>(!p||t.project===p)&&(!e||(t.epic_keys||[t.epic_key]).includes(e))&&matchesTeam(t,team));
- // Only explicitly team-scoped aggregates can describe a team subset.
- const reported=data.reported_statistics.filter(r=>(!p||!r.project||r.project===p)&&(!e||!r.epic||r.epic===e)&&(!team||((r.teams||[]).length>0&&matchesTeam(r,team))));
- const epics=data.epics.filter(x=>(!e||x.key===e)&&(!(p||team)||issues.some(i=>i.epic_keys.includes(x.key))||tasks.some(t=>(t.epic_keys||[t.epic_key]).includes(x.key))||reported.some(r=>r.epic===x.key&&(!p||r.project===p))));
- const projects=data.projects.filter(x=>(!p||x.id===p)&&(!team||matchesTeam(x,team)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id))&&(!e||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id&&(t.epic_keys||[t.epic_key]).includes(e))||reported.some(r=>r.project===x.id&&r.epic===e)));
- const complete=(e?data.epics.some(x=>x.key===e)&&data.epics.filter(x=>x.key===e).every(x=>x.scope_complete):data.totals.scope_complete);
- return {p,e,team,issues,tasks,epics,projects,reported,totals:sumMetrics(issues,complete)};
+ const p=$('project').value,e=$('epic').value,team=$('team').value,q=$('search').value.trim().toLowerCase();
+ const invalid=[...urlStateErrors];if(p&&!data.projects.some(x=>x.id===p))invalid.push('Project: '+p);if(e&&!data.epics.some(x=>x.key===e))invalid.push('Epic: '+e);if(!['','BE','FE','QA','unassigned'].includes(team))invalid.push('Team: '+team);
+ const found=i=>!q||(i.key+' '+i.title).toLowerCase().includes(q);
+ const issues=invalid.length?[]:data.issues.filter(i=>(!p||i.projects.includes(p))&&(!e||i.epic_keys.includes(e))&&matchesTeam(i,team)&&found(i));
+ const tasks=invalid.length?[]:data.tasks.filter(t=>(!p||t.project===p)&&(!e||(t.epic_keys||[t.epic_key]).includes(e))&&matchesTeam(t,team)&&(!q||(t.id+' '+t.title+' '+(t.issue_keys||[]).join(' ')+' '+(t.epic_keys||[]).join(' ')).toLowerCase().includes(q)||issues.some(i=>i.task_ids.includes(t.id))));
+ const reported=invalid.length||q?[]:data.reported_statistics.filter(r=>(!p||!r.project||r.project===p)&&(!e||!r.epic||r.epic===e)&&(!team||((r.teams||[]).length>0&&matchesTeam(r,team))));
+ const epics=invalid.length?[]:data.epics.filter(x=>(!e||x.key===e)&&(!(p||team||q)||issues.some(i=>i.epic_keys.includes(x.key))||tasks.some(t=>(t.epic_keys||[t.epic_key]).includes(x.key))||reported.some(r=>r.epic===x.key&&(!p||r.project===p))));
+ const projects=invalid.length?[]:data.projects.filter(x=>(!p||x.id===p)&&(!team||matchesTeam(x,team)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id))&&(!(e||q)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id&&(!e||(t.epic_keys||[t.epic_key]).includes(e)))||reported.some(r=>r.project===x.id&&r.epic===e)));
+ const complete=!invalid.length&&(e?data.epics.some(x=>x.key===e)&&data.epics.filter(x=>x.key===e).every(x=>x.scope_complete):data.totals.scope_complete);
+ return {p,e,team,q,invalid,issues,tasks,epics,projects,reported,totals:sumMetrics(issues,complete)};
+}
+function getDelivery(issue) {
+ const raw=issue?.delivery&&typeof issue.delivery==='object'?issue.delivery:{};
+ const verification=raw.verification&&typeof raw.verification==='object'?raw.verification:{};
+ const freshness=raw.freshness&&typeof raw.freshness==='object'?raw.freshness:{};
+ return {stage:Object.hasOwn(processStages,raw.stage)?raw.stage:'unknown',stage_reason:raw.stage_reason||'No process stage is recorded.',blocked:raw.blocked===true,blockers:Array.isArray(raw.blockers)?raw.blockers:[],existing_work:raw.existing_work||'Existing work has not been recorded.',remainder:raw.remainder||'Remaining work is unknown.',owner:raw.owner||null,next_action:raw.next_action||'No next action is recorded; consult the owning project.',acceptance_criteria:raw.acceptance_criteria||'',criteria:Array.isArray(raw.criteria)?raw.criteria:[],verification:{status:verification.status||'unknown',verifier:verification.verifier||null,evidence:Array.isArray(verification.evidence)?verification.evidence:[],reason:verification.reason||'Verification evidence has not been recorded.'},trace:Array.isArray(raw.trace)?raw.trace:[],freshness,source:raw.source||issue?.sources?.join(', ')||'Source unavailable'};
+}
+function stageMarker(issue) {
+ const delivery=getDelivery(issue),stage=delivery.stage;
+ const kind=stage==='complete'&&issue.verified?'complete':['implementation','investigating'].includes(stage)?'progress':['review','verification','ready'].includes(stage)?'waiting':'unknown';
+ return {label:stage==='complete'&&!issue.verified?'Stage unknown':processStages[stage],kind};
+}
+function issueButton(issue,label) {const button=el('button',label||issue.key+' · '+issue.title,'issue-button');button.type='button';button.dataset.issueKey=issue.key;button.addEventListener('click',()=>openIssue(issue.key));return button;}
+function ownershipRoles(issue,full=false) {
+ const ownership=issue.delivery?.ownership,area=el('div',undefined,'ownership-roles');
+ const definitions=[['jira','Jira assignee','not_loaded'],['implementation','Implementation owner/project','not_recorded'],['execution','Recorded execution owner','not_recorded']];
+ definitions.forEach(([key,label,missing])=>{
+  const raw=ownership?.[key],role=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw:{},members=Array.isArray(role.members)?role.members.filter(member=>member&&typeof member==='object'&&!Array.isArray(member)):[];
+  const recordedName=typeof role.name==='string'?role.name.trim():'',memberNames=members.map(member=>typeof member.name==='string'?member.name.trim():'').filter(Boolean);
+  const compactNames=key==='execution'&&!full?members.map(member=>{const memberName=typeof member.name==='string'?member.name.trim():'',identity=memberName||member.identity;if(typeof identity!=='string')return '';if(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity))return (typeof member.project==='string'&&member.project?member.project+' · ':'')+'recorded session '+identity.slice(0,8);return memberName||identity;}).filter(Boolean):[];
+  const name=compactNames.length?[...new Set(compactNames)].join('; '):recordedName||[...new Set(memberNames)].join('; ');
+  const allowed=key==='jira'?['assigned','unassigned','not_loaded','conflict']:['assigned','not_recorded','conflict'];
+  let state=raw===undefined?missing:allowed.includes(role.status)?role.status:'conflict';if(state==='assigned'&&!name)state='conflict';
+  const text=state==='assigned'?name:state==='unassigned'?'Unassigned in Jira':state==='not_loaded'?'Not loaded':state==='not_recorded'?'Not recorded':'Conflicting records';
+  const row=el('div',undefined,'ownership-role');row.dataset.role=key;row.dataset.status=state;row.append(el('p',label+': '+text));
+  if(full){
+   const explanation=typeof role.reason==='string'&&role.reason?role.reason:state==='not_loaded'?'Jira assignee metadata has not been loaded.':state==='not_recorded'?'No ownership record is available for this role.':state==='conflict'?'Ownership records are conflicting or malformed; no owner is selected.':'Recorded ownership snapshot.';
+   row.append(el('p',explanation),el('p','Ownership source: '+(typeof role.source==='string'&&role.source?role.source:'Not recorded')));
+   if(key==='jira'){row.append(el('p','Ownership snapshot retrieved: '+timestampDescription(role.retrieved_at)));if(Array.isArray(role.observations))role.observations.forEach(observation=>{if(observation&&typeof observation==='object')row.append(el('p','Ownership observation source: '+(typeof observation.source==='string'?observation.source:'Not recorded')+' · retrieved: '+timestampDescription(observation.retrieved_at)));});}
+   members.forEach(member=>{const record=el('article',undefined,'criterion');record.append(el('p','Recorded name: '+(typeof member.name==='string'?member.name:'Not recorded')),el('p','Recorded identity: '+(typeof member.identity==='string'?member.identity:'Not recorded')),el('p','Ownership source: '+(typeof member.source==='string'&&member.source?member.source:'Not recorded')));[['task_id','Linked task'],['project','Project context'],['task_status','Task snapshot status']].forEach(([field,title])=>{if(typeof member[field]==='string'&&member[field])record.append(el('p',title+': '+member[field]));});row.append(record);});
+  }
+  area.append(row);
+ });
+ const legacyOwner=typeof issue.delivery?.owner==='string'?issue.delivery.owner.trim():'';
+ const represented=legacyOwner&&['implementation','execution'].some(key=>{const role=ownership?.[key];return role?.status==='assigned'&&(role.name===legacyOwner||(Array.isArray(role.members)&&role.members.some(member=>member&&(member.name===legacyOwner||member.identity===legacyOwner))));});
+ if(legacyOwner&&!represented)area.append(el('p','Recorded local owner (legacy): '+legacyOwner));
+ if(full)area.append(el('p','Execution identities are recorded worker snapshots; they do not establish current liveness or reachability.'));
+ return area;
+}
+function compactIssueCards(area,issues,makeCard) {
+ const order={implementation:0,review:1,verification:2,investigating:3,ready:4,uninvestigated:5,unknown:6,complete:7};
+ const sorted=[...issues].sort((a,b)=>(order[getDelivery(a).stage]-order[getDelivery(b).stage])||a.key.localeCompare(b.key));
+ area.append(el('p',`${sorted.length} recorded issues`,'muted'));const remaining=el('details',undefined,'remaining-work');
+ if(sorted.length>5)remaining.append(el('summary',`Show remaining ${sorted.length-5}`));
+ sorted.forEach((issue,index)=>{const card=makeCard(issue);(index<5?area:remaining).append(card);});if(sorted.length>5)area.append(remaining);
+}
+function renderProcess(s) {
+ const strip=$('process-strip');strip.replaceChildren();Object.entries(processStages).forEach(([stage,label])=>{const count=s.issues.filter(i=>getDelivery(i).stage===stage).length,box=el('div',undefined,'process-stage');box.dataset.stage=stage;box.append(el('strong',String(count)),el('span',label));strip.append(box);});
+ const groups={now:[],blocked:[],next:[]};s.issues.forEach(issue=>{const d=getDelivery(issue);if(d.blocked)groups.blocked.push(issue);else if(['investigating','implementation','review','verification'].includes(d.stage))groups.now.push(issue);else if(d.stage!=='complete')groups.next.push(issue);});
+ Object.entries(groups).forEach(([group,issues])=>{const area=$('process-'+group);area.replaceChildren();compactIssueCards(area,issues,issue=>{const d=getDelivery(issue),marker=stageMarker(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),el('span',marker.label,'graph-status marker-'+marker.kind),ownershipRoles(issue),el('p',d.next_action));if(d.blocked)card.append(el('span','! Blocked','graph-status marker-blocked'),el('p','Blockers: '+(d.blockers.join('; ')||'Blocked; reason not recorded'),'process-blocker'));card.append(el('small','Recorded suggestion · dependency gate required'));return card;});if(!issues.length)area.append(el('p','No matching recorded work.','muted'));});
+ const queue=$('verification-queue');queue.replaceChildren();const pending=s.issues.filter(i=>getDelivery(i).stage==='verification'||i.local_status==='awaiting_verification');compactIssueCards(queue,pending,issue=>{const d=getDelivery(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),ownershipRoles(issue),el('p',criteriaSummary(d)),el('p','Verifier: '+(d.verification.verifier||'Unknown')),el('p',d.verification.reason));return card;});if(!pending.length)queue.append(el('p','No matching issues await recorded verification.','muted'));
+}
+function criteriaSummary(delivery) {return delivery.criteria.length?`${delivery.criteria.filter(c=>Array.isArray(c.evidence)&&c.evidence.length).length} / ${delivery.criteria.length} criteria have recorded evidence; individual outcomes remain explicit.`:'Criteria coverage unknown — no structured criterion evidence recorded.';}
+function timestampDescription(value,now=Date.now()) {
+ if(value===null||value===undefined||value==='')return 'Timestamp unavailable';
+ const match=typeof value==='string'&&value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):?(\d{2}))$/);
+ if(!match)return 'Invalid timestamp: '+String(value);
+ const [,year,month,day,hour,minute,second,fraction,zone,sign,offsetHour,offsetMinute]=match;
+ const leap=Number(year)%4===0&&(Number(year)%100!==0||Number(year)%400===0),days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+ if(Number(month)<1||Number(month)>12||Number(day)<1||Number(day)>days[Number(month)-1]||Number(hour)>23||Number(minute)>59||Number(second)>59||(zone!=='Z'&&(Number(offsetHour)>23||Number(offsetMinute)>59)))return 'Invalid timestamp: '+String(value);
+ const normalized=year+'-'+month+'-'+day+'T'+hour+':'+minute+':'+second+(fraction?'.'+fraction.slice(0,3).padEnd(3,'0'):'')+(zone==='Z'?'Z':sign+offsetHour+':'+offsetMinute);
+ const instant=Date.parse(normalized);if(!Number.isFinite(instant))return 'Invalid timestamp: '+String(value);
+ if(instant>now)return 'Future timestamp: '+String(value)+' — verify source clock';
+ const minutes=Math.floor((now-instant)/60000),age=minutes<1?'less than a minute':minutes<60?minutes+' min':minutes<1440?Math.floor(minutes/60)+' h':Math.floor(minutes/1440)+' d';return String(value)+' · '+age+' old';
+}
+function addEvidence(target,items) {(items||[]).forEach(item=>target.append(el('p','Evidence: '+String(item))));}
+function addDetailSection(body,title,text) {const section=el('section',undefined,'detail-section');section.append(el('h3',title));if(text)section.append(el('p',String(text)));body.append(section);return section;}
+function renderIssueDetail(key) {
+ const body=$('issue-detail-body'),issue=data.issues.find(i=>i.key===key);body.replaceChildren();if(!issue){$('issue-detail-title').textContent=key;body.append(el('p','This issue is unavailable in the current snapshot.'));return;}
+ const d=getDelivery(issue),marker=stageMarker(issue);$('issue-detail-title').textContent=issue.key+' · '+issue.title;
+ const intro=addDetailSection(body,'Recorded process',d.stage_reason);intro.append(el('span',marker.label,'graph-status marker-'+marker.kind),ownershipRoles(issue,true),el('p','Jira snapshot status: '+issue.source_status),el('p','Issue verification: '+(issue.verified?'Verified complete':'Not verified')));if(d.blocked)intro.append(el('span','! Blocked','graph-status marker-blocked'),el('p','Blocked: '+(d.blockers.join('; ')||'Reason not recorded'),'process-blocker'));
+ addDetailSection(body,'Existing work',d.existing_work);addDetailSection(body,'Remaining work',d.remainder);addDetailSection(body,'Next action',d.next_action+' Execution still requires the dependency gate and project loop.');
+ const dependencies=addDetailSection(body,'Prerequisites & dependents');const id='issue:'+issue.key,links=(data.graph?.edges||[]).filter(e=>e.kind==='requires'&&(e.from===id||e.to===id));
+ links.forEach(edge=>{const other=(data.graph.nodes||[]).find(n=>n.id===(edge.to===id?edge.from:edge.to)),line=edge.to===id?'Prerequisite: ':'Dependent: ';dependencies.append(el('p',line+(other?graphRecordLabel(other):edge.to===id?edge.from:edge.to)+' · '+(edge.condition||'Recorded dependency')));addEvidence(dependencies,edge.evidence);});if(!links.length)dependencies.append(el('p','No direct prerequisite or dependent is recorded; this does not establish execution eligibility.'));
+ const focus=el('button','Focus this issue in dependency map');focus.type='button';focus.id='focus-issue';focus.addEventListener('click',()=>{focusId=id;closeIssue();$('graph-execution').setAttribute('aria-pressed','true');$('graph-hierarchy').setAttribute('aria-pressed','false');writeUrl('dependencies');selectView();render();});dependencies.append(focus);
+ const work=addDetailSection(body,'Linked local work');const tasks=data.tasks.filter(t=>(issue.task_ids||[]).includes(t.id));tasks.forEach(t=>{const row=el('article',undefined,'criterion');row.append(el('strong',`Local task · ${t.id}`),el('p',taskDisplayTitle(t)+' · '+(labels[t.status]||t.status)+' · '+(t.evidenced?'completion evidence recorded':'completion evidence unconfirmed')),el('p',taskAssociation(t)),el('p','Source: '+(t.source||'Unknown')));const evidence=Array.isArray(t.evidence)?t.evidence:(data.graph?.nodes||[]).find(n=>n.id==='task:'+t.id)?.evidence||[];addEvidence(row,evidence);if(!evidence.length)row.append(el('p','Evidence references unavailable.'));work.append(row);});if(!tasks.length)work.append(el('p','No linked local tasks recorded.'));
+ const acceptance=addDetailSection(body,'Acceptance criteria',d.acceptance_criteria||'Original acceptance criteria unavailable.');acceptance.append(el('p',criteriaSummary(d)));d.criteria.forEach((criterion,index)=>{const row=el('article',undefined,'criterion');row.append(el('strong',`${index+1}. ${criterion.text||'Criterion text unavailable'}`),el('p','Recorded outcome: '+(criterion.status||'unknown')));addEvidence(row,Array.isArray(criterion.evidence)?criterion.evidence:[]);if(!criterion.evidence?.length)row.append(el('p','Missing criterion evidence.'));acceptance.append(row);});
+ const verification=addDetailSection(body,'Verification',d.verification.reason);verification.append(el('p','Recorded status: '+d.verification.status),el('p','Verifier: '+(d.verification.verifier||'Unknown')));addEvidence(verification,d.verification.evidence);
+ const trace=addDetailSection(body,'Revision traceability');[['written','Written'],['reviewed','Reviewed'],['integrated','Integrated'],['tested_integrated','Tested integrated revision']].forEach(([step,label])=>{const record=d.trace.find(t=>t.step===step),row=el('article',undefined,'trace-step');row.dataset.traceStep=step;row.append(el('strong',label),el('p','Status: '+(record?.status||'unknown')),el('p','Revision: '+(record?.revision||'Unknown')),el('p','Evidence time: '+timestampDescription(record?.at)),el('p',record?.reason||'No traceability reason recorded.'));addEvidence(row,Array.isArray(record?.evidence)?record.evidence:[]);trace.append(row);});
+ const clocks=addDetailSection(body,'Source freshness');clocks.append(el('p','Jira record updated: '+timestampDescription(d.freshness.jira)),el('p',(d.freshness.worker_basis==='linked_task_updated_at_proxy'?'Worker report proxy (linked task updated): ':'Worker report: ')+timestampDescription(d.freshness.worker)),el('p','Evidence recorded: '+timestampDescription(d.freshness.evidence)),el('p','Dashboard read: '+timestampDescription(data.generated_at)),el('p','Read time does not update source evidence or establish session liveness.'),el('p','Source: '+d.source));
+}
+function openIssue(key) {$('issue-detail').dataset.issueKey=key;detailReturnFocus=document.activeElement;renderIssueDetail(key);if(!$('issue-detail').open)$('issue-detail').showModal();$('close-detail').focus();}
+function closeIssue() {$('issue-detail').close();if(detailReturnFocus?.isConnected)detailReturnFocus.focus();}
+function comparisonKey(s) {return 'mailbox-process-v1:'+JSON.stringify({mode:data.mode,p:s.p,e:s.e,team:s.team,q:s.q});}
+function comparisonMembership(values) {return [...new Set((Array.isArray(values)?values:[]).filter(value=>typeof value==='string'&&value.trim()).map(value=>value.trim()))].sort();}
+function comparisonScopeLabel(scope) {return Object.entries(scope).map(([kind,values])=>kind+': '+(values.join(', ')||'none recorded')).join('; ');}
+function snapshotForComparison(s) {
+ const records={};s.issues.forEach(i=>{const d=getDelivery(i);records['issue:'+i.key]={kind:'Jira issue',label:i.key+' · '+i.title,stage:d.stage,complete:i.verified===true,blocked:d.blocked,blockers:[...d.blockers].sort(),scope:{projects:comparisonMembership(i.projects),epics:comparisonMembership(i.epic_keys),teams:comparisonMembership(i.teams)}};});
+ s.tasks.forEach(t=>{const blockers=Array.isArray(t.blockers)?t.blockers:[];records['task:'+t.id]={kind:'Local task',label:t.id+' · '+taskDisplayTitle(t),stage:t.status||'unknown',complete:t.status==='done'&&t.evidenced===true,blocked:t.status==='blocked'||blockers.length>0,blockers:[...blockers].sort(),scope:{projects:comparisonMembership([t.project]),epics:comparisonMembership(t.epic_keys||[t.epic_key]),issues:comparisonMembership(t.issue_keys),teams:comparisonMembership(t.teams)}};});
+ return {version:3,read_at:data.generated_at,records};
+}
+function validComparisonSnapshot(value) {return value?.version===3&&value.records&&typeof value.records==='object'&&!Array.isArray(value.records)&&Object.values(value.records).every(record=>record&&typeof record.label==='string'&&typeof record.kind==='string'&&typeof record.stage==='string'&&typeof record.complete==='boolean'&&typeof record.blocked==='boolean'&&Array.isArray(record.blockers)&&record.blockers.every(item=>typeof item==='string')&&record.scope&&typeof record.scope==='object'&&!Array.isArray(record.scope)&&['projects','epics','teams',...(record.kind==='Local task'?['issues']:[])].every(key=>Array.isArray(record.scope[key])&&record.scope[key].every(item=>typeof item==='string')));}
+function snapshotChanges(previous,current) {
+ const result=[];Object.entries(current.records).forEach(([key,record])=>{const old=previous.records[key],label=record.kind+' '+record.label;if(!old){result.push('Added '+label);return;}if(old.stage!==record.stage)result.push(label+': stage / execution '+old.stage+' → '+record.stage);if(old.complete!==record.complete)result.push(label+': verified completion '+(record.complete?'recorded':'removed'));if(old.blocked!==record.blocked||JSON.stringify(old.blockers)!==JSON.stringify(record.blockers))result.push(label+': blockers changed from '+(old.blockers.join('; ')||'none recorded')+' to '+(record.blockers.join('; ')||'none recorded'));if(JSON.stringify(old.scope)!==JSON.stringify(record.scope))result.push(label+': scope / associations changed from '+comparisonScopeLabel(old.scope)+' to '+comparisonScopeLabel(record.scope));});Object.entries(previous.records).forEach(([key,record])=>{if(!Object.hasOwn(current.records,key))result.push('Removed '+record.kind+' '+record.label);});return result;
+}
+function captureComparison(s) {
+ const key=comparisonKey(s),current=snapshotForComparison(s);try{const raw=localStorage.getItem(key);if(!raw)comparison={key,message:'First visit to this filtered scope. The current snapshot is saved for the next successful refresh.',changes:[]};else{let previous;try{previous=JSON.parse(raw);}catch(_){previous=null;}comparison=validComparisonSnapshot(previous)?{key,message:'Compared with this scope last viewed at '+previous.read_at,changes:snapshotChanges(previous,current)}:{key,message:'Saved comparison is unavailable or invalid. A new baseline is saved for the next refresh.',changes:[]};}localStorage.setItem(key,JSON.stringify(current));}catch(_){comparison={key,message:'Browser storage unavailable; changes since the last view cannot be persisted.',changes:[]};}
+}
+function renderChanges(s) {const area=$('changes-since-view');area.replaceChildren();if(!comparison||comparison.key!==comparisonKey(s)){area.append(el('p','Refresh data to compare this filtered scope. Switching filters, tabs or focus does not advance its baseline.'));return;}area.append(el('p',comparison.message));comparison.changes.forEach(change=>area.append(el('p',change,'scope-change')));if(!comparison.changes.length&&comparison.message.startsWith('Compared'))area.append(el('p','No issue or local task additions, removals, stage, blocker, verified-completion or scope / association changes.'));}
+function focusGraph(graph,view,id,mode) {
+ if(!id)return view;if(!graph.nodes.some(n=>n.id===id))return {nodes:[],edges:[],focusMissing:true};
+ const edges=graph.edges.filter(e=>e.kind===(mode==='hierarchy'?'membership':'requires')),visible=new Set([id]);
+ for(const direction of ['ancestors','descendants']){const seen=new Set([id]),queue=[id];for(let index=0;index<queue.length;index++){const current=queue[index];edges.forEach(e=>{const next=direction==='ancestors'?(e.to===current?e.from:null):(e.from===current?e.to:null);if(next&&!seen.has(next)){seen.add(next);visible.add(next);queue.push(next);}});}}
+ const selected=new Set(view.nodes.filter(n=>!n.boundary).map(n=>n.id));return {nodes:graph.nodes.filter(n=>visible.has(n.id)).map(n=>({...n,boundary:!selected.has(n.id)})),edges:edges.filter(e=>visible.has(e.from)&&visible.has(e.to))};
 }
 function renderMetrics(s) {
  const m=s.totals,area=$('metrics');area.replaceChildren();
@@ -50,7 +160,7 @@ function renderProjects(s) {
  card.append(el('p',selected.length?(m.scope_complete?'Enumerated scope · low / likely / high':'Known subset only · full estimate unknown'):'No imported issue scope'));
  if(!s.team&&p.reported_estimate)card.append(el('p','Reported project estimate: '+range(p.reported_estimate)));
  if(!s.team&&p.reported_actual_machine_hours!==null)card.append(el('p','Reported project actual: '+moneyless(p.reported_actual_machine_hours)+' h'));
- card.addEventListener('click',()=>{$('project').value=s.p===p.id?'':p.id;render();});area.append(card);});
+ card.addEventListener('click',()=>{$('project').value=s.p===p.id?'':p.id;writeUrl();render();});area.append(card);});
  if(!projects.length)empty(area,'No matching projects','Choose another filter or add project statistics to the mailbox.');
 }
 function svgEl(tag,attrs={},text) {const n=document.createElementNS('http://www.w3.org/2000/svg',tag);Object.entries(attrs).forEach(([k,v])=>n.setAttribute(k,v));if(text!==undefined)n.textContent=text;return n;}
@@ -59,36 +169,130 @@ function cycleEdges(edges) {
  const reaches=(start,target)=>{const queue=[start],seen=new Set();while(queue.length){const n=queue.pop();if(n===target)return true;if(seen.has(n))continue;seen.add(n);queue.push(...(adjacency.get(n)||[]));}return false;};
  return new Set(edges.filter(e=>reaches(e.to,e.from)).map(e=>e.from+'>'+e.to));
 }
+function selectGraph(graph,s,mode,includeLocal=true) {
+ const selected=new Set(),issueIds=new Set(s.issues.map(i=>'issue:'+i.key)),taskIds=new Set(s.tasks.map(t=>'task:'+t.id));
+ const projectIds=new Set(s.projects.map(p=>'project:'+p.id)),epicIds=new Set(s.epics.map(e=>'epic:'+e.key));
+ graph.nodes.forEach(n=>{
+  const contextual=n.contextual===true||n.relationship_direction==='unknown'||n.status==='relationship direction unknown';
+  const contextVisible=contextual&&s.epics.some(e=>(n.epic_keys||[]).includes(e.key));
+  const anchor=mode==='execution'&&(epicIds.has(n.id)||projectIds.has(n.id))&&graph.edges.some(e=>e.kind==='requires'&&(e.from===n.id||e.to===n.id));
+  const milestone=n.kind==='milestone'&&(!s.p||(n.projects||[]).includes(s.p))&&(!s.e||(n.epic_keys||[]).includes(s.e))&&matchesTeam(n,s.team)&&(!s.q||(n.id+' '+n.label+' '+(n.detail||'')).toLowerCase().includes(s.q));
+  if(issueIds.has(n.id)||(includeLocal&&taskIds.has(n.id))||milestone||contextVisible||anchor||(mode==='hierarchy'&&(projectIds.has(n.id)||epicIds.has(n.id))))selected.add(n.id);
+ });
+ const edges=graph.edges.filter(e=>e.kind===(mode==='hierarchy'?'membership':'requires'));
+ const visible=new Set(selected);
+ // Ancestors stay visible through every level, even when a filter hides their owner.
+ let changed=true;while(changed){changed=false;edges.forEach(e=>{if(visible.has(e.to)&&!visible.has(e.from)){visible.add(e.from);changed=true;}});}
+ // Show direct consumers as context without pulling their entire unrelated work into scope.
+ if(mode==='execution')edges.forEach(e=>{if(selected.has(e.from)&&(includeLocal||!e.to.startsWith('task:')))visible.add(e.to);});
+ return {nodes:graph.nodes.filter(n=>visible.has(n.id)).map(n=>({...n,boundary:!selected.has(n.id)||n.contextual===true||n.relationship_direction==='unknown'||n.status==='relationship direction unknown'})),edges:edges.filter(e=>visible.has(e.from)&&visible.has(e.to))};
+}
+function layoutGraph(nodes,edges) {
+ const cycles=cycleEdges(edges),ids=new Set(nodes.map(n=>n.id)),depth=new Map(nodes.map(n=>[n.id,0]));
+ const acyclic=edges.filter(e=>ids.has(e.from)&&ids.has(e.to)&&!cycles.has(e.from+'>'+e.to));
+ const incoming=new Map(nodes.map(n=>[n.id,0])),outgoing=new Map();
+ acyclic.forEach(e=>{incoming.set(e.to,incoming.get(e.to)+1);if(!outgoing.has(e.from))outgoing.set(e.from,[]);outgoing.get(e.from).push(e.to);});
+ const queue=nodes.filter(n=>incoming.get(n.id)===0).map(n=>n.id);
+ for(let i=0;i<queue.length;i++){const id=queue[i];(outgoing.get(id)||[]).forEach(next=>{depth.set(next,Math.max(depth.get(next),depth.get(id)+1));incoming.set(next,incoming.get(next)-1);if(incoming.get(next)===0)queue.push(next);});}
+ const rows=new Map(),positions=new Map();
+ [...nodes].sort((a,b)=>(a.label||a.id).localeCompare(b.label||b.id)).forEach(n=>{const rank=depth.get(n.id),row=rows.get(rank)||0;positions.set(n.id,{x:20+rank*285,y:48+row*158});rows.set(rank,row+1);});
+ return {positions,cycles,width:Math.max(760,(Math.max(0,...depth.values())+1)*285+40),height:Math.max(230,Math.max(0,...rows.values())*158+65)};
+}
+function graphCompletion(n) {return n.unresolved?'Unresolved record':n.ready?'Verified complete':'Completion unverified';}
+function graphMarker(n,unmet,process=null) {
+ if(n.ready)return {label:'✓ Verified complete',kind:'complete'};
+ if(n.kind==='issue'&&process)return process;
+ if(n.status==='blocked')return {label:'! Blocked',kind:'blocked'};
+ if(n.status==='in_progress')return {label:'● In progress',kind:'progress'};
+ if(unmet)return {label:'! Prerequisites unmet',kind:'blocked'};
+ return {label:'○ Unverified',kind:'unknown'};
+}
+function taskAssociation(record) {
+ const linked=Array.isArray(record.issue_keys)?record.issue_keys:[];
+ if(linked.length)return 'Linked Jira: '+linked.join(', ');
+ if(record.mapping_kind==='epic'&&(record.epic_keys||[]).length)return 'Epic scope: '+record.epic_keys.join(', ');
+ return 'No Jira mapping recorded';
+}
+function taskDisplayTitle(record) {
+ const raw=String(record.title||record.label||'Untitled local work');
+ const keys=[...(Array.isArray(record.issue_keys)?record.issue_keys:[]),...(record.mapping_kind?(record.epic_keys||[]):[])].sort((a,b)=>b.length-a.length);
+ const key=keys.find(k=>raw.startsWith(k)&&(raw.length===k.length||/[\s:—–-]/.test(raw[k.length])));
+ return key?raw.slice(key.length).replace(/^[\s:—–-]+/,'')||'Untitled local work':raw;
+}
+function graphIdentity(n) {
+ if(n.kind==='task')return {identity:'Local task · '+n.id.replace(/^task:/,'').slice(0,8),title:taskDisplayTitle(n),association:taskAssociation(n),kind:'Local task'};
+ const type=String(n.issue_type||n.source_issue_type||'');
+ const kind=n.kind==='issue'?(n.unresolved&&!/^[A-Z][A-Z0-9_]*-\d+$/.test(n.id.replace(/^issue:/,'')))?'External reference':/sub.?task/i.test(type)?'Jira subtask':type.toLowerCase()==='story'?'Jira story':'Jira issue':n.kind==='epic'?type?'Jira '+type:'Epic scope':n.kind==='milestone'?'Evidence milestone':'Project';
+ return {identity:n.label||n.id,title:n.detail||kind,association:(n.epic_keys||[]).length?'Epic scope: '+n.epic_keys.join(', '):n.kind==='project'?'Project grouping':'No Epic mapping recorded',kind};
+}
+function graphRecordLabel(n) {const info=graphIdentity(n);return info.identity+(n.kind==='task'?' · '+info.title:'');}
+function localWorkGroups(graph,s) {
+ const selected=new Set(s.tasks.map(t=>'task:'+t.id)),owners=new Map([...s.issues.map(i=>[i.key,i]),...s.epics.map(e=>[e.key,e])]);
+ const groups={history:[],current:[],audit:[]};
+ graph.nodes.filter(n=>n.kind==='task'&&selected.has(n.id)).forEach(n=>{
+  if(n.ready){groups.history.push(n);return;}
+  const keys=(n.issue_keys||[]).length?n.issue_keys:n.mapping_kind==='epic'?(n.epic_keys||[]):[];
+  const active=keys.some(key=>{const owner=owners.get(key);return owner&&['in progress','development peer review'].includes(String(owner.source_status||'').toLowerCase());});
+  groups[active?'current':'audit'].push(n);
+ });
+ return groups;
+}
+function renderLocalWork(groups) {
+ [['current','Current local work','Owning Jira work is recorded as active. Expand a local record for its result and evidence.'],['history','Local work history','Only local tasks with verified completion evidence appear here; completion does not imply the owning Jira item is complete.'],['audit','Other local work / audit','Owning Jira activity is unknown or not recorded as active. These records remain inspectable; unverified prerequisites stay on the map.']].forEach(([kind,title,note])=>{
+  const area=$('local-work-'+kind);area.replaceChildren();area.append(el('summary',`${title} · ${groups[kind].length}`),el('p',note,'footnote'));
+  groups[kind].forEach(n=>{const info=graphIdentity(n),marker=graphMarker(n,(n.unmet_prerequisites||[]).length),detail=el('details',undefined,'graph-record');detail.dataset.nodeId=n.id;const summary=el('summary');summary.append(el('span',marker.label,'graph-status marker-'+marker.kind),document.createTextNode(' '+info.identity+' · '+info.title));detail.append(summary,el('p',info.association),el('p','Full local task ID: '+n.id.replace(/^task:/,'')),el('p','Full recorded title: '+n.label),el('p','Result: '+graphCompletion(n)+' · Recorded status: '+(labels[n.status]||n.status||'Unknown')),el('p','Source: '+(n.source||'Source unavailable')));
+   (n.evidence||[]).forEach(item=>detail.append(el('p','Evidence: '+item)));area.append(detail);
+  });
+ });
+}
 function renderMap(s) {
- const area=$('map'),list=$('dependency-list');area.replaceChildren();list.replaceChildren();
- const selected=new Set(s.issues.map(i=>i.key)),taskSelected=new Set(s.tasks.map(t=>t.id));
- const relevant=data.dependencies.filter(e=>selected.has(e.from)||selected.has(e.to));
- const taskEdges=data.task_dependencies.filter(e=>taskSelected.has(e.from)||taskSelected.has(e.to));
- const external=data.external_dependencies.filter(d=>s.epics.some(e=>e.key===d.epic));
- const nodes=new Map();s.issues.forEach(i=>nodes.set(i.key,{label:i.key,detail:i.title,status:i.local_status,kind:'issue'}));
- relevant.forEach(e=>[e.from,e.to].forEach(k=>{if(!nodes.has(k))nodes.set(k,{label:k,detail:data.issues.some(i=>i.key===k)?'Outside selection':'Unresolved prerequisite',boundary:true,kind:'issue'});}));
- s.tasks.forEach(t=>nodes.set('task:'+t.id,{label:'Task · '+t.id,detail:t.title,status:t.status,kind:'task'}));
- taskEdges.forEach(e=>[e.from,e.to].forEach(k=>{if(!nodes.has('task:'+k))nodes.set('task:'+k,{label:'Task · '+k,detail:'Outside selection / unresolved',boundary:true,kind:'task'});}));
- external.forEach(d=>{if(!nodes.has(d.key))nodes.set(d.key,{label:d.key,detail:'External Epic dependency',boundary:true,kind:'issue'});});
- if(!nodes.size&&!s.epics.length){empty(area,'The map is ready for your scope.','Import Epic issues or local tasks to see their dependencies. Projects remain visible above.');return;}
- const displayedProjects=s.projects;
- const h=Math.max(nodes.size,displayedProjects.length,s.epics.length)*74+78;
- const svg=svgEl('svg',{width:960,height:h,viewBox:`0 0 960 ${h}`,role:'img','aria-label':'Project, epic, issue and task dependency map'});
- const defs=svgEl('defs');for(const [id,color] of [['arrow','#4a7bc3'],['cycle-arrow','#d7745e']]){const m=svgEl('marker',{id,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});m.append(svgEl('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:color}));defs.append(m);}svg.append(defs);
- [['PROJECT',20],['EPIC',265],['ISSUE / LOCAL TASK',520]].forEach(([text,x])=>svg.append(svgEl('text',{x,y:26,class:'lane'},text)));
- const pos=new Map(),projectPos=new Map(),epicPos=new Map();
- displayedProjects.forEach((p,i)=>projectPos.set(p.id,{x:20,y:48+i*74,label:p.name,detail:p.kind==='coordination'?'Coordination group':p.registered?'Project':'Unregistered project'}));
- s.epics.forEach((e,i)=>epicPos.set(e.key,{x:265,y:48+i*74,label:e.key,detail:e.scope_complete?'Complete scope':'Incomplete scope'}));
- [...nodes.entries()].forEach(([key,n],i)=>pos.set(key,{x:520,y:48+i*74,...n}));
- const line=(a,b)=>{if(a&&b)svg.append(svgEl('path',{d:`M${a.x+205} ${a.y+24} C${a.x+235} ${a.y+24} ${b.x-25} ${b.y+24} ${b.x} ${b.y+24}`,stroke:'#d6e0eb','stroke-width':1.2,fill:'none'}));};
- s.issues.forEach(i=>{i.projects.forEach(p=>i.epic_keys.forEach(e=>line(projectPos.get(p),epicPos.get(e))));i.epic_keys.forEach(e=>line(epicPos.get(e),pos.get(i.key)));});
- s.tasks.forEach(t=>line(projectPos.get(t.project),pos.get('task:'+t.id)));
- s.reported.forEach(r=>line(projectPos.get(r.project),epicPos.get(r.epic)));
- external.forEach(d=>line(epicPos.get(d.epic),pos.get(d.key)));
- const edges=[...relevant,...taskEdges.map(e=>({...e,from:'task:'+e.from,to:'task:'+e.to}))];const cycles=cycleEdges(edges);
- edges.forEach((e,index)=>{const a=pos.get(e.from),b=pos.get(e.to);if(!a||!b)return;const cycle=cycles.has(e.from+'>'+e.to);const far=795+(index%7)*17;svg.append(svgEl('path',{d:`M${a.x+205} ${a.y+24} C${far} ${a.y+24} ${far} ${b.y+24} ${b.x+205} ${b.y+24}`,stroke:cycle?'#d7745e':'#4a7bc3','stroke-width':1.6,'stroke-dasharray':e.unresolved?'5 4':'none',fill:'none','marker-end':`url(#${cycle?'cycle-arrow':'arrow'})`}));list.append(el('span',`${e.from} → ${e.to}${cycle?' · cycle':''}${e.unresolved?' · unresolved':''}`,cycle?'cycle':''));});
- const draw=n=>{const g=svgEl('g');g.append(svgEl('title',{},n.label+' — '+n.detail));g.append(svgEl('rect',{x:n.x,y:n.y,width:205,height:52,rx:6,fill:n.boundary?'#f3f6fa':'#fff',stroke:n.status==='verified_done'?'#8ecab5':'#d5e0ec','stroke-dasharray':n.boundary?'4 3':'none'}));g.append(svgEl('text',{x:n.x+12,y:n.y+21,'font-weight':600},String(n.label).slice(0,29)));g.append(svgEl('text',{x:n.x+12,y:n.y+38,'font-size':9,fill:'#7b8e9e'},String(n.detail).slice(0,34)));svg.append(g);};
- projectPos.forEach(draw);epicPos.forEach(draw);pos.forEach(draw);area.append(svg);
+ const area=$('map'),list=$('dependency-list'),records=$('dependency-nodes');area.replaceChildren();list.replaceChildren();records.replaceChildren();renderLocalWork({current:[],history:[],audit:[]});
+ const mode=$('graph-hierarchy').getAttribute('aria-pressed')==='true'?'hierarchy':'execution';
+ $('graph-legend').textContent=mode==='hierarchy'?'Membership only: project → Epic → parent issue → subtask → linked local work. Membership does not impose execution order.':'Prerequisite → dependent. Markers: green ✓ verified complete · blue ● in progress · orange ! blocked / unmet · gray ○ unverified. Dashed: context / unresolved · coral edges: cycle.';
+ if(!data.graph){empty(area,'Relationship data unavailable','Refresh after updating the dashboard projection. No dependencies are inferred from task titles or blockers.');$('graph-summary').textContent='No graph snapshot available.';return;}
+ const showLocal=$('graph-local-work').checked,groups=localWorkGroups(data.graph,s);renderLocalWork(groups);
+ const baseView=selectGraph(data.graph,s,mode,showLocal),rawView=s.invalid?.length?{nodes:[],edges:[]}:focusGraph(data.graph,baseView,focusId,mode),kept=new Set(rawView.nodes.filter(n=>showLocal||n.kind!=='task'||!n.ready).map(n=>n.id));
+ const view={nodes:rawView.nodes.filter(n=>kept.has(n.id)),edges:rawView.edges.filter(e=>kept.has(e.from)&&kept.has(e.to))},selected=view.nodes.filter(n=>!n.boundary),boundary=view.nodes.length-selected.length;
+ $('focus-summary').textContent=focusId?(rawView.focusMissing?'Focus unavailable: '+focusId:'Focused on '+focusId+' · prerequisites and dependents; outside-filter context does not change totals.'):'No graph focus · showing filtered scope';$('clear-focus').hidden=!focusId;
+ const connected=new Set(view.edges.flatMap(e=>[e.from,e.to]));
+ const drawing=mode==='execution'?view.nodes.filter(n=>connected.has(n.id)||n.id===focusId):view.nodes;
+ $('graph-summary').textContent=`${selected.length} selected records · ${boundary} context records · ${view.edges.length} ${mode==='hierarchy'?'membership links':'prerequisites'}. Context does not change scope totals. ${showLocal?'All local work shown.':`${groups.history.length} verified local tasks in history; ${groups.current.length+groups.audit.length} other local records folded. Unverified prerequisite context stays visible.`}`;
+ if(!drawing.length)empty(area,rawView.focusMissing?'Focused record unavailable':mode==='execution'?'No recorded prerequisites in this selection':'No hierarchy records in this selection',mode==='execution'?'An empty prerequisite list does not establish readiness or completion.':'Choose another filter or import immediate issue parent relationships.');
+ else {
+  const layout=layoutGraph(drawing,view.edges),svg=svgEl('svg',{width:layout.width,height:layout.height,viewBox:`0 0 ${layout.width} ${layout.height}`,role:'img','aria-label':mode==='hierarchy'?'Issue parent hierarchy':'Layered execution prerequisite map'});
+  const defs=svgEl('defs');for(const [id,color] of [['graph-arrow','#4a7bc3'],['graph-unmet','#bd8739'],['graph-cycle','#d7745e']]){const marker=svgEl('marker',{id,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});marker.append(svgEl('path',{d:'M 0 0 L 10 5 L 0 10 z',fill:color}));defs.append(marker);}svg.append(defs);
+  const byId=new Map(view.nodes.map(n=>[n.id,n]));
+  view.edges.forEach(e=>{const a=layout.positions.get(e.from),b=layout.positions.get(e.to);if(!a||!b)return;const cyclic=layout.cycles.has(e.from+'>'+e.to),met=byId.get(e.from)?.ready===true;
+   const color=e.kind==='membership'?'#d6e0eb':cyclic?'#d7745e':met?'#4a7bc3':'#bd8739';
+   const path=b.x>a.x?`M${a.x+245} ${a.y+34} C${a.x+265} ${a.y+34} ${b.x-20} ${b.y+34} ${b.x} ${b.y+34}`:`M${a.x+245} ${a.y+34} C${a.x+275} ${a.y+34} ${b.x+275} ${b.y+34} ${b.x+245} ${b.y+34}`;
+   const line=svgEl('path',{d:path,stroke:color,'stroke-width':1.8,fill:'none','stroke-dasharray':e.unresolved||byId.get(e.from)?.boundary||byId.get(e.to)?.boundary?'5 4':'none','data-from':e.from,'data-to':e.to,'data-kind':e.kind});
+   if(e.kind==='requires')line.setAttribute('marker-end',`url(#${cyclic?'graph-cycle':met?'graph-arrow':'graph-unmet'})`);svg.append(line);
+  });
+  const ranks=new Set([...layout.positions.values()].map(p=>p.x));[...ranks].sort((a,b)=>a-b).forEach((x,i)=>svg.append(svgEl('text',{x,y:25,class:'lane'},`${mode==='hierarchy'?'LEVEL':'STEP'} ${i+1}`)));
+  drawing.forEach(n=>{const p=layout.positions.get(n.id),g=svgEl('g',{'data-node-id':n.id,'data-boundary':String(n.boundary)});
+   const info=graphIdentity(n),unmet=data.graph.edges.filter(e=>e.kind==='requires'&&e.to===n.id&&!data.graph.nodes.find(x=>x.id===e.from)?.ready).length,issue=n.kind==='issue'?data.issues.find(i=>'issue:'+i.key===n.id):null,marker=graphMarker(n,unmet,issue?stageMarker(issue):null);
+   g.append(svgEl('title',{},`${info.identity} — ${info.title} · ${info.kind} · ${info.association} · Full record: ${n.label}${n.detail?' — '+n.detail:''} · ${n.id} · ${graphCompletion(n)}${n.boundary?' · outside selection context':''}`));
+   g.append(svgEl('rect',{x:p.x,y:p.y,width:245,height:136,rx:7,stroke:n.ready?'#8ecab5':'#d5e0ec',fill:'#fff','stroke-dasharray':n.boundary||n.unresolved?'4 3':'none'}));
+   g.append(svgEl('text',{x:p.x+10,y:p.y+19,'font-weight':600},String(info.identity).slice(0,34)),svgEl('text',{x:p.x+10,y:p.y+38},String(info.title).slice(0,34)),svgEl('text',{x:p.x+10,y:p.y+57,'font-size':10},String(info.association).slice(0,40)),svgEl('text',{x:p.x+10,y:p.y+75,'font-size':10},`${info.kind}${n.boundary?' · context':''}${n.unresolved?' · unresolved':''}`));
+   const badge=svgEl('g',{class:'graph-marker marker-'+marker.kind,'data-marker':marker.kind});badge.append(svgEl('rect',{x:p.x+9,y:p.y+84,width:225,height:22,rx:4}),svgEl('text',{x:p.x+16,y:p.y+99,'font-size':11,'font-weight':600},marker.label));g.append(badge);
+   const blocked=issue&&getDelivery(issue).blocked,bottom=svgEl('g',blocked?{class:'node-blocked'}:{});if(blocked)bottom.append(svgEl('rect',{x:p.x+9,y:p.y+111,width:225,height:18,rx:3}));bottom.append(svgEl('text',{x:p.x+13,y:p.y+123,'font-size':10},`${blocked?'! Blocked · ':''}Unmet prerequisites: ${unmet}`));g.append(bottom);if(issue){g.setAttribute('role','button');g.setAttribute('tabindex','0');g.setAttribute('aria-label','Open '+issue.key+' details');g.addEventListener('click',()=>openIssue(issue.key));g.addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();openIssue(issue.key);}});}svg.append(g);
+  });area.append(svg);
+ }
+ const byId=new Map(view.nodes.map(n=>[n.id,n])),cycles=cycleEdges(view.edges);
+ view.edges.forEach(e=>{const from=byId.get(e.from),to=byId.get(e.to),cyclic=cycles.has(e.from+'>'+e.to),met=from?.ready===true;
+  const detail=el('details',undefined,'graph-relation'+(cyclic?' cycle':''));detail.append(el('summary',`${from?graphRecordLabel(from):e.from} → ${to?graphRecordLabel(to):e.to} · ${e.kind==='membership'?'membership':cyclic?'cycle — prerequisite unresolved':met?'prerequisite verified':'prerequisite unmet / unverified'}`));
+  detail.append(el('p',`${e.from} → ${e.to}`));if(e.condition)detail.append(el('p','Condition: '+e.condition));
+  detail.append(el('p','Source: '+(e.source||'Source unavailable')));if(e.updated_at)detail.append(el('p','Recorded: '+e.updated_at));
+  (e.evidence||[]).forEach(item=>detail.append(el('p','Evidence: '+item)));list.append(detail);
+ });
+ view.nodes.forEach(n=>{const detail=el('details',undefined,'graph-record');detail.dataset.nodeId=n.id;
+  const incoming=data.graph.edges.filter(e=>e.kind==='requires'&&e.to===n.id),unmet=incoming.filter(e=>!data.graph.nodes.find(x=>x.id===e.from)?.ready);
+  const scheduling=incoming.length?`${unmet.length} / ${incoming.length} prerequisites unmet or unverified`:'No recorded prerequisites; readiness not established';
+  const info=graphIdentity(n),issue=n.kind==='issue'?data.issues.find(i=>'issue:'+i.key===n.id):null,marker=graphMarker(n,unmet.length,issue?stageMarker(issue):null),summary=el('summary');summary.append(el('span',marker.label,'graph-status marker-'+marker.kind),document.createTextNode(' '+graphRecordLabel(n)+(n.boundary?' · outside selection context':'')));detail.append(summary,el('p',n.id),el('p',info.kind+' · '+info.association),el('p',info.title),el('p','Full recorded title: '+(n.label||n.id)+(n.detail?' — '+n.detail:'')),el('p',`Recorded status: ${labels[n.status]||n.status||'Unknown'} · ${scheduling}`));
+  unmet.forEach(e=>detail.append(el('p','Awaiting: '+(data.graph.nodes.find(x=>x.id===e.from)?graphRecordLabel(data.graph.nodes.find(x=>x.id===e.from)):e.from))));
+  detail.append(el('p','Source: '+(n.source||'Source unavailable')),el('p','Recorded: '+(n.updated_at||'Timestamp unavailable')));
+  (n.evidence||[]).forEach(item=>detail.append(el('p','Evidence: '+item)));records.append(detail);
+ });
 }
 function executionSummary(tasks) {
  const counts={};tasks.forEach(t=>{counts[t.status]=(counts[t.status]||0)+1;});
@@ -104,16 +308,16 @@ function renderExecution(s) {
  s.epics.forEach(epic=>{
   const tasks=epicOnly.filter(t=>t.epic_keys.includes(epic.key));if(!tasks.length)return;
   const card=el('article',undefined,'task');card.append(el('strong',`${epic.key} · Epic-level work`),el('p',executionSummary(tasks)),el('p','These tasks are not allocated to individual issues.'));
-  const details=el('details');details.append(el('summary',`${tasks.length} tasks · show work`));tasks.forEach(t=>details.append(el('p',`${labels[t.status]||t.status} · ${t.title}`)));card.append(details);cards.append(card);
+  const details=el('details');details.append(el('summary',`${tasks.length} tasks · show work`));tasks.forEach(t=>details.append(el('p',`Local task · ${t.id.slice(0,8)} · ${labels[t.status]||t.status} · ${taskDisplayTitle(t)} · ${taskAssociation(t)}`)));card.append(details);cards.append(card);
  });
 }
 function renderIssues(s) {
  const tbody=$('issues');tbody.replaceChildren();$('issue-count').textContent=`${s.issues.length} unique issues`;
  s.issues.forEach(i=>{
-  const row=el('tr'),key=el('td');key.append(el('strong',i.key),el('span',i.title));
+  const row=el('tr'),key=el('td');key.append(issueButton(i,i.key),el('span',i.title));
   if(i.conflict)key.append(el('small','Conflicting snapshots — reconcile source'));
   const members=el('td',i.projects.join(', ')||'Unmapped');members.append(el('small','Team: '+((i.teams||[]).join(', ')||'Unassigned')),el('small',i.epic_keys.join(', ')));
-  const source=el('td',i.source_status),local=el('td');local.append(status(i.local_status));
+  const source=el('td',i.source_status),local=el('td'),process=stageMarker(i);local.append(el('span',process.label,'graph-status marker-'+process.kind),el('small','Issue verification: '),status(i.local_status));if(getDelivery(i).blocked)local.append(el('span','! Blocked','graph-status marker-blocked'));
   if(i.recorded_local_status!==i.local_status)local.append(el('small',`Recorded: ${labels[i.recorded_local_status]||i.recorded_local_status}`));
   const tasks=s.tasks.filter(t=>i.task_ids.includes(t.id));
   local.append(el('small',`Task execution (filtered): ${executionSummary(tasks)}`),el('small',`${tasks.length} visible / ${i.task_ids.length} required task links (issue-wide)`));
@@ -122,7 +326,7 @@ function renderIssues(s) {
   const details=el('details');details.append(el('summary','Verification & linked work'));
   details.append(el('p',`Issue-wide verification: ${i.verification_reason}`));
   if(i.recorded_verification_reason)details.append(el('p','Recorded verification note: '+i.recorded_verification_reason));
-  tasks.forEach(t=>details.append(el('p',`${labels[t.status]||t.status} · ${t.title} · ${t.evidenced?'completion evidence recorded':'completion evidence pending'} · ${t.id}`)));
+  tasks.forEach(t=>details.append(el('p',`Local task · ${t.id.slice(0,8)} · ${labels[t.status]||t.status} · ${taskDisplayTitle(t)} · ${t.evidenced?'completion evidence recorded':'completion evidence pending'} · ${t.id}`)));
   if(i.task_execution.missing.length)details.append(el('p','Missing task records: '+i.task_execution.missing.join(', ')));
   details.append(el('p',`Issue updated: ${i.updated_at||'Timestamp unavailable'}`),el('p','Sources: '+i.sources.join(', ')));local.append(details);
   const estimate=el('td',range(issueEstimate(i)));estimate.append(el('small',i.estimate?'Explicit estimate':'Model · low / likely / high'));row.append(key,members,source,local,estimate);tbody.append(row);
@@ -133,20 +337,28 @@ function renderTasks(s) {
  const area=$('tasks');area.replaceChildren();$('task-count').textContent=`${s.tasks.length} local tasks`;
  s.tasks.forEach(t=>{
   const card=el('article',undefined,'task');
-  const mapping=t.mapping_kind==='epic'?`Epic-level: ${t.epic_keys.join(', ')} · no issue allocation`:t.issue_keys.length?`Issues: ${t.issue_keys.join(', ')}`:'No issue mapping';
-  card.append(el('strong',t.title),status(t.status),el('p',`${t.project} · ${(t.teams||[]).join(', ')||'Unassigned'} · ${mapping}`));
+  const mapping=taskAssociation(t);
+  card.append(el('p','Local task · '+t.id.slice(0,8),'local-identity'),el('strong',taskDisplayTitle(t)),status(t.status),el('p',`${t.project} · ${(t.teams||[]).join(', ')||'Unassigned'} · ${mapping}`));
   if(t.unresolved_issue_keys.length)card.append(el('p','Unresolved keys: '+t.unresolved_issue_keys.join(', ')));
   card.append(el('p',`${t.evidenced?'Completion evidence recorded':'Completion evidence pending'} · task only; issue verification is separate`),el('p',t.id),el('p',`Updated: ${t.updated_at||'Timestamp unavailable'} · ${t.source}`));
+  const original=el('details');original.append(el('summary','Original task record'),el('p','Full local task ID: '+t.id),el('p','Full recorded title: '+t.title),el('p',mapping));card.append(original);
   if(t.blockers.length)card.append(el('p','Blockers: '+t.blockers.join(', ')));area.append(card);
  });
  if(!s.tasks.length)empty(area,'No local tasks yet','Tasks appear here even before they are mapped to Jira.');
 }
 function renderReported(s) {const area=$('reported');area.replaceChildren();const items=s.reported;items.forEach(r=>{const d=el('details');d.append(el('summary',`${r.project||'All projects'} / ${r.epic||'Project snapshot'} · ${r.source}`),el('p',r.updated_at?'Updated '+r.updated_at:'Timestamp unavailable','muted'),el('pre',JSON.stringify(r.values,null,2)));area.append(d);});if(!items.length)empty(area,'No aggregate statistics recorded',s.team?'No explicitly team-scoped aggregates match. Whole-project totals are hidden for team filters.':'This panel preserves reported figures separately from verified issue progress.');}
-function render(){if(!data)return;const s=selection();renderMetrics(s);renderProjects(s);renderMap(s);renderExecution(s);renderIssues(s);renderTasks(s);renderReported(s);$('warnings').replaceChildren(...data.warnings.map(w=>el('li',w)));$('warning-count').textContent=`(${data.warnings.length})`;$('warnings-panel').open=!!data.warnings.length;$('demo-banner').hidden=data.mode!=='demo';$('freshness').textContent=`${data.mode==='demo'?'Demo':'Mailbox'} read ${new Date(data.generated_at).toLocaleTimeString()}`;scenario();}
-function populate(id,items,key,label,all){const select=$(id),previous=select.value;select.replaceChildren();const option=el('option',all);option.value='';select.append(option);items.forEach(item=>{const o=el('option',item[label]);o.value=item[key];select.append(o);});if(items.some(i=>i[key]===previous))select.value=previous;}
-async function load(){const ticket=++request;$('error').hidden=true;$('refresh').disabled=true;const params=new URLSearchParams({mode:$('demo').checked?'demo':'live'});['low','likely','high','review_multiplier'].forEach(k=>params.set(k,$(k).value));try{const response=await fetch('/api/dashboard?'+params);const payload=await response.json();if(!response.ok)throw new Error(payload.error?.message||'Unable to read mailbox');if(ticket!==request)return;data=payload;populate('project',data.projects,'id','name','All projects');populate('epic',data.epics,'key','key','All epics');render();}catch(e){if(ticket!==request)return;$('error').textContent=`Could not refresh: ${e.message}. ${data?'Last successful snapshot is still displayed.':'Check the mailbox mount and try again.'}`;$('error').hidden=false;}finally{if(ticket===request)$('refresh').disabled=false;}}
+function render(){if(!data)return;const s=selection();renderMetrics(s);renderProjects(s);renderProcess(s);renderChanges(s);renderMap(s);renderExecution(s);renderIssues(s);renderTasks(s);renderReported(s);$('scope-warning').hidden=!s.invalid.length;$('scope-warning').textContent=s.invalid.length?'Unavailable filter selection: '+s.invalid.join('; ')+'. No scope is shown until the selection is corrected.':'';const warnings=[...(data.warnings||[]),...(data.delivery_warnings||[])];$('warnings').replaceChildren(...warnings.map(w=>el('li',w)));$('warning-count').textContent=`(${warnings.length})`;$('warnings-panel').open=!!warnings.length;$('demo-banner').hidden=data.mode!=='demo';$('freshness').textContent=`${data.mode==='demo'?'Demo':'Mailbox'} read ${timestampDescription(data.generated_at)}`;scenario();}
+function selectValue(id,value){const select=$(id);if(value&&![...select.options].some(option=>option.value===value)){const option=el('option','Unavailable: '+value);option.value=value;select.append(option);}select.value=value;}
+function populate(id,items,key,label,all){const select=$(id),previous=select.value;select.replaceChildren();const option=el('option',all);option.value='';select.append(option);items.forEach(item=>{const o=el('option',item[label]);o.value=item[key];select.append(o);});selectValue(id,previous);}
+async function load(){const ticket=++request;$('error').hidden=true;$('refresh').disabled=true;const params=new URLSearchParams({mode:$('demo').checked?'demo':'live'});['low','likely','high','review_multiplier'].forEach(k=>params.set(k,$(k).value));try{const response=await fetch('/api/dashboard?'+params);const payload=await response.json();if(!response.ok)throw new Error(payload.error?.message||'Unable to read mailbox');if(ticket!==request)return;data=payload;populate('project',data.projects,'id','name','All projects');populate('epic',data.epics,'key','key','All epics');captureComparison(selection());render();if($('issue-detail').open)renderIssueDetail($('issue-detail').dataset.issueKey);}catch(e){if(ticket!==request)return;$('error').textContent=`Could not refresh: ${e.message}. ${data?'Last successful snapshot is still displayed.':'Check the mailbox mount and try again.'}`;$('error').hidden=false;}finally{if(ticket===request)$('refresh').disabled=false;}}
+function restoreUrl(){const params=new URLSearchParams(location.search);urlStateErrors=[];selectValue('project',params.get('project')||'');selectValue('epic',params.get('epic')||'');selectValue('team',params.get('team')||'');$('search').value=params.get('search')||'';focusId=params.get('focus')||'';const mode=params.get('mode')||'live';$('demo').checked=mode==='demo';if(!['live','demo'].includes(mode))urlStateErrors.push('Mode: '+mode);const graph=params.get('graph')||'execution';if(!['hierarchy','execution'].includes(graph))urlStateErrors.push('Graph mode: '+graph);$('graph-hierarchy').setAttribute('aria-pressed',String(graph==='hierarchy'));$('graph-execution').setAttribute('aria-pressed',String(graph!=='hierarchy'));$('graph-local-work').checked=params.get('local')==='all';}
+function writeUrl(view){const url=new URL(location.href),values={project:$('project').value,epic:$('epic').value,team:$('team').value,search:$('search').value,focus:focusId,mode:$('demo').checked?'demo':'live',graph:$('graph-hierarchy').getAttribute('aria-pressed')==='true'?'hierarchy':'execution',local:$('graph-local-work').checked?'all':''};Object.entries(values).forEach(([key,value])=>{if(value)url.searchParams.set(key,value);else url.searchParams.delete(key);});if(view)url.hash=view;urlStateErrors=[];if(url.href!==location.href)history.pushState(null,'',url);}
 function scenario(){const count=Number($('scenario-count').value);const model=data?.estimate_method;if(!model)return;$('scenario-result').textContent=Number.isFinite(count)&&count>=0&&count<=10000?range(Object.fromEntries(['low','likely','high'].map(k=>[k,count*model[k]*model.review_multiplier]))):'Enter a count from 0 to 10,000';}
-$('refresh').addEventListener('click',load);$('demo').addEventListener('change',()=>{$('project').value='';$('epic').value='';load();});$('team').addEventListener('change',render);$('project').addEventListener('change',render);$('epic').addEventListener('change',render);$('model-form').addEventListener('submit',e=>{e.preventDefault();load();});$('scenario-count').addEventListener('input',scenario);load();
+$('graph-local-work').addEventListener('change',()=>{writeUrl();if(data)renderMap(selection());});
+['graph-hierarchy','graph-execution'].forEach(id=>$(id).addEventListener('click',()=>{['graph-hierarchy','graph-execution'].forEach(other=>$(other).setAttribute('aria-pressed',String(id===other)));writeUrl();if(data)renderMap(selection());}));
+$('clear-focus').addEventListener('click',()=>{focusId='';writeUrl();render();});
+$('close-detail').addEventListener('click',closeIssue);$('issue-detail').addEventListener('cancel',event=>{event.preventDefault();closeIssue();});
+$('refresh').addEventListener('click',load);$('demo').addEventListener('change',()=>{writeUrl();load();});['team','project','epic'].forEach(id=>$(id).addEventListener('change',()=>{writeUrl();render();}));$('search').addEventListener('input',()=>{writeUrl();render();});$('model-form').addEventListener('submit',e=>{e.preventDefault();load();});$('scenario-count').addEventListener('input',scenario);restoreUrl();load();
 
 function syncThemeButton(){const dark=document.documentElement.dataset.theme!=='light';$('theme-toggle').textContent=dark?'☀ Light theme':'☾ Dark theme';$('theme-toggle').setAttribute('aria-label',dark?'Switch to light theme':'Switch to dark theme');}
 $('theme-toggle').addEventListener('click',()=>{const next=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=next;try{localStorage.setItem('mailbox-theme',next);}catch(_){}syncThemeButton();});syncThemeButton();
@@ -154,4 +366,4 @@ $('theme-toggle').addEventListener('click',()=>{const next=document.documentElem
 const viewTitles={overview:['A clear view of the work.','Dependencies, verified progress and Codex effort in one place.'],dependencies:['See what depends on what.','Follow project, Epic, issue and local task relationships.'],tasks:['From scope to verified work.','Jira snapshots and local execution, with evidence kept distinct.'],estimates:['Plan the effort explicitly.','Explore Codex machine-hours with transparent assumptions.'],sources:['Know where the numbers come from.','Reported snapshots, provenance and data-quality warnings.']};
 function selectView(){const requested=location.hash.slice(1);const key=Object.hasOwn(viewTitles,requested)?requested:'overview';document.querySelectorAll('.view-tabs [role=tab]').forEach(tab=>{const active=tab.id==='tab-'+key;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;});document.querySelectorAll('.page-view').forEach(view=>view.hidden=view.id!=='view-'+key);document.querySelector('.page-heading h1').textContent=viewTitles[key][0];document.querySelector('.page-heading .subtitle').textContent=viewTitles[key][1];document.querySelector('.page-heading .eyebrow').textContent='PROJECT OPERATIONS / '+key.toUpperCase();document.title='Mailbox · '+key[0].toUpperCase()+key.slice(1);}
 document.querySelector('.view-tabs').addEventListener('keydown',event=>{const tabs=[...document.querySelectorAll('.view-tabs [role=tab]')],index=tabs.indexOf(document.activeElement);if(index<0)return;let next;if(event.key==='ArrowRight')next=(index+1)%tabs.length;else if(event.key==='ArrowLeft')next=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')next=0;else if(event.key==='End')next=tabs.length-1;else return;event.preventDefault();tabs[next].focus();location.hash=tabs[next].getAttribute('href');});
-window.addEventListener('hashchange',()=>{selectView();window.scrollTo({top:0});});selectView();
+window.addEventListener('hashchange',()=>{selectView();window.scrollTo({top:0});});window.addEventListener('popstate',()=>{const previousMode=$('demo').checked;restoreUrl();selectView();if(!data||previousMode!==$('demo').checked)load();else render();});selectView();

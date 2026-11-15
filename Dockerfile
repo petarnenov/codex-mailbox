@@ -1,6 +1,6 @@
 FROM python:3.13-slim
 WORKDIR /app
-COPY server.py ./
+COPY server.py dependency_graph.py delivery_process.py ./
 COPY static ./static
 COPY demo ./demo
 USER 65534:65534
