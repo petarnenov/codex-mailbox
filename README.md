@@ -272,3 +272,11 @@ Jira assignee, implementation owner and recorded execution owner are separate ro
 `implementation_owner` identifies the explicitly recorded implementation responsibility. Execution ownership comes from linked local tasks' `owner` or `owner_session_id`, with task/project/source context. Multiple recorded workers remain inspectable; a recorded session ID is not proof that the worker is currently active. Missing local responsibility is **Not recorded**, rather than a claim that nobody owns the Jira issue. Legacy local `owner` records remain local ownership and never become a Jira assignee.
 
 Local enrichment may fetch only ownership fields read-only from Jira and preserve the imported issue scope, statuses, parents and acceptance criteria. Such a partial refresh does not make the full Jira snapshot newer and never changes Jira assignment.
+
+Issue detail prioritizes the process summary, next action and compact ownership cards. Recorded sources, observations and full worker identities remain available in expandable audit sections. Existing and remaining work are visually separated; presentation does not change recorded stages, assignments or completion evidence.
+
+### Acceptance criteria presentation
+
+Issue details display acceptance criteria as numbered cards with explicit recorded outcomes and expandable evidence references. The coverage counter counts criteria with recorded evidence, independently of their outcomes; it is not a completion percentage. Green outcome styling requires a recorded passing outcome and evidence. Failed or blocked outcomes receive warning styling; other outcomes remain neutral.
+
+When structured criteria are unavailable, the original text is displayed as source excerpts split at blank lines or list-item boundaries. These excerpts are labeled **Not assessed** and do not establish criterion coverage. When structured criteria exist, the original acceptance text remains available in an expandable section. Missing criteria and missing evidence are explicit. The cards support light/dark themes and narrow screens, and preserve the dashboard's read-only verification semantics.
