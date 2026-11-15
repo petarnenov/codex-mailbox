@@ -1,0 +1,7 @@
+{
+  "projects": [
+    {"id": "atlas", "name": "Atlas Refresh"},
+    {"id": "beacon", "name": "Beacon Data"},
+    {"id": "cinder", "name": "Cinder Portal"}
+  ]
+}

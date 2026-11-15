@@ -1,0 +1,18 @@
+[
+  {
+    "key": "DEMO-101", "title": "Define common identity contract", "projects": ["atlas", "beacon"],
+    "source_status": "In Progress", "local_status": "verified_done",
+    "verification": {"outcome": "passed"}, "evidence": ["demo://identity-contract"],
+    "codex_estimate_hours": {"low": 2, "likely": 3, "high": 5}, "actual_machine_hours": 2.6,
+    "depends_on": ["DEMO-102"]
+  },
+  {
+    "key": "DEMO-102", "title": "Implement identity provider adapter", "projects": ["atlas"],
+    "source_status": "To Do", "local_status": "in_progress", "depends_on": ["DEMO-103", "DEMO-999"],
+    "codex_estimate_hours": {"low": 3, "likely": 5, "high": 8}
+  },
+  {
+    "key": "DEMO-103", "title": "Add onboarding recovery path", "projects": ["beacon"],
+    "source_status": "Blocked", "local_status": "blocked", "depends_on": ["DEMO-102"]
+  }
+]

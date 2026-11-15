@@ -1,0 +1,11 @@
+[
+  {
+    "key": "DEMO-201", "title": "Add secure portal landing page", "projects": ["atlas", "cinder"],
+    "source_status": "In Review", "local_status": "awaiting_verification",
+    "depends_on": ["DEMO-202"], "actual_machine_hours": 3.65
+  },
+  {
+    "key": "DEMO-202", "title": "Publish account activity view", "projects": ["cinder"],
+    "source_status": "To Do", "local_status": "pending", "depends_on": ["DEMO-201"]
+  }
+]

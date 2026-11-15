@@ -1,0 +1,7 @@
+{
+  "id": "atlas",
+  "generated_at": "2026-11-10T12:00:00Z",
+  "statistics": {"total_issues": 3, "verified_done": 1, "completion_percentage": 33.3},
+  "codex_estimate_hours": {"low": 8, "likely": 14, "high": 23},
+  "actual_machine_hours": 6.25
+}

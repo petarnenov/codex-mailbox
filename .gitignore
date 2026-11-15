@@ -1,0 +1,31 @@
+# Local workflow logs, screenshots, credentials and tooling
+.claude/
+.codex/
+.playwright-mcp/
+.env
+.env.*
+!.env.example
+.tools/
+.venv/
+node_modules/
+__pycache__/
+*.py[cod]
+.coverage
+.coverage.*
+coverage.json
+htmlcov/
+.pytest_cache/
+.DS_Store
+
+# Mailbox data belongs outside the application checkout
+/mailbox-data/
+/data/
+/projects.json
+/projects/
+/epics/
+/tasks/
+/sessions/
+/inbox/
+/outbox/
+/archive/
+/discovery/
