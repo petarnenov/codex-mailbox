@@ -25,44 +25,75 @@ codex-mailbox/
     ├── tests/
     ├── demo/
     ├── compose.yaml
+    ├── Makefile
+    ├── scripts/
     └── .env            # local configuration, ignored by Git
 ```
 
-Run Compose from `dashboard/` and set `MAILBOX_ROOT` to the parent mailbox directory. The source checkout is scoped to the component so private coordination records remain outside the published files. Runtime data stays local and is mounted read-only.
+Run `make setup` from `dashboard/`; it detects the parent mailbox directory when `projects.json` is present. You can also set `MAILBOX_ROOT` explicitly. The source checkout is scoped to the component so private coordination records remain outside the published files. Runtime data stays local and is mounted read-only.
 
-## Start
+## Start with Make
 
-Requirements: Docker with Compose and an existing mailbox workspace. From that workspace directory, install the component if `dashboard/` is not already present:
+`make setup` installs missing system tools and prepares the project. On **macOS**, it finds or bootstraps [Homebrew](https://docs.brew.sh/Installation), installs Make and [Docker Desktop](https://formulae.brew.sh/cask/docker-desktop) as needed, and starts Docker Desktop. On **Linux** with `apt-get` or `dnf`, it installs missing Make/curl and uses the [official Docker development installer](https://docs.docker.com/engine/install/ubuntu/#install-using-the-convenience-script) when Docker is absent. If an existing engine only lacks Compose, it installs the [Compose CLI plugin](https://docs.docker.com/compose/install/linux/#install-the-plugin-manually) for the current user without replacing the engine. Existing working dependencies are preserved.
+
+If Make is not installed yet, bootstrap it from the component directory first:
+
+```sh
+sh scripts/install-system.sh
+# Homebrew exposes GNU Make as make through its gnubin directory.
+export PATH="/opt/homebrew/opt/make/libexec/gnubin:/usr/local/opt/make/libexec/gnubin:$PATH"
+make setup
+```
+
+System installation may request administrator authentication. Docker Desktop may require you to finish its first-run prompts; setup waits for readiness for up to 120 seconds and reports an actionable error if it cannot proceed. On Linux, an existing engine must be accessible to your account; setup does not change socket permissions or grant group access. Unsupported systems fail explicitly; use WSL2 on Windows. Python, Node and coverage are installed in isolated container environments; local Python/Node installations are unnecessary. `make doctor` only checks and never invokes the installer.
+
+From an existing mailbox workspace, install the component if `dashboard/` is absent:
 
 ```sh
 git clone https://github.com/petarnenov/codex-mailbox.git dashboard
 cd dashboard
-cp .env.example .env
+make setup
+make doctor
+make up
 ```
 
-If it is already present, simply run `cd dashboard` from the mailbox workspace. Edit `.env` and set `MAILBOX_ROOT` to the **absolute path of the parent mailbox workspace**. That directory contains `projects.json` and the available `projects/`, `epics/` and `tasks/` snapshots.
+If the component is already present, run the same Make commands there. Setup detects the parent mailbox's `projects.json`, creates `.env` only when absent, and installs a forwarding `Makefile` in the parent workspace if it has none. After setup, all commands also work directly from the mailbox root. Existing `.env` and root `Makefile` files are preserved.
+
+For a mailbox at another location, provide its absolute path:
 
 ```sh
-docker compose --project-name mailbox-dashboard up -d --build
+MAILBOX_ROOT=/absolute/path/to/mailbox make setup
+MAILBOX_ROOT=/absolute/path/to/mailbox make up
 ```
 
-Open **http://localhost:17171**. The service is published only on `127.0.0.1`, runs as an unprivileged user with a read-only root filesystem, and mounts the configured data directory at `/data:ro`. Compose requires an explicit `MAILBOX_ROOT`; it will not silently mount a guessed location.
+An explicitly supplied `MAILBOX_ROOT` overrides `.env` for that invocation. Setup saves the selected path when creating a new `.env`; it preserves any existing `.env`, so keep supplying an override or edit that file if you intend to change its saved location. Spaces, dollar signs and hashes in paths are supported; quote paths when setting environment variables.
 
-Alternatively, set the path for a single invocation:
+Open **http://localhost:17171**. The service binds only to `127.0.0.1`, runs as an unprivileged user with a read-only root filesystem, and mounts mailbox data at `/data:ro`.
 
-```sh
-MAILBOX_ROOT=/absolute/path/to/mailbox-data docker compose up -d --build
-```
+| Command | Purpose |
+| --- | --- |
+| `make` / `make help` | List commands |
+| `make setup` | Install missing system tools, prepare configuration and container dependencies |
+| `make doctor` | Check Docker CLI, Compose, daemon and mailbox configuration without changes |
+| `make doctor-deps` | Check the Docker prerequisites without requiring mailbox configuration |
+| `make up` / `make start` | Build current source, start, and wait for a healthy dashboard |
+| `make down` / `make stop` | Stop the mailbox dashboard |
+| `make restart` | Rebuild and recreate the dashboard, then wait for health |
+| `make build` | Build the dashboard image |
+| `make status` | Show container status |
+| `make logs` | Follow logs; Ctrl-C detaches |
+| `make health` | Check the running dashboard's HTTP health endpoint |
+| `make demo` | Start with synthetic data for this invocation; preserve `.env` |
+| `make test` | Build the tools image and run tests in an isolated container |
+| `make lint` | Check JavaScript and shell syntax |
+| `make check` | Run tests and syntax checks |
+| `make coverage` | Run tests with coverage; save reports under `.coverage-output/` |
 
-To try the application without private mailbox data, use the shipped synthetic fixture:
+`make demo` uses the same port and replaces the running dashboard's data mount with the shipped synthetic fixture. Select **Explore demo** for its explicitly labeled demo view. Run `make up` to restore the configured live mount. It never writes or copies demo data into the mailbox.
 
-```sh
-MAILBOX_ROOT="$PWD/demo" docker compose up -d --build
-```
+Setup and initial image builds/downloads need internet access; Docker checks do not pull images. Tests and syntax checks run with networking disabled and the component source mounted read-only. Coverage writes only to the separate `.coverage-output/` directory, which is excluded from Git and Docker build context. Runtime project records, `.env`, session records and local evidence are never part of published source.
 
-Then check **Explore demo** in the interface for the explicitly labeled demo view. No credentials are needed. `.env` and local mailbox data directories are ignored by Git.
-
-Refresh reads current files; no background watcher or Jira synchronization is installed. `docker compose down` stops the dashboard. It does not change mailbox data. Port conflicts are reported by Docker; do not stop unrelated services.
+Refresh reads current files; no background watcher or Jira synchronization is installed. `make down` stops the dashboard without changing mailbox data. Port conflicts are reported; unrelated services are not stopped.
 
 Dark theme is the default on a fresh visit. The header theme toggle offers light mode and remembers an explicit choice locally; a blocking head script selects it before the stylesheet paints.
 
@@ -163,17 +194,15 @@ Only known enumerated scope is modeled. Incomplete scope is labeled a known subs
 ## Validation
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install coverage
-.venv/bin/python -m coverage run --branch --source=server -m unittest discover -s tests -v
-.venv/bin/python -m coverage report -m
-node --check static/app.js
-docker compose config
-docker compose up -d --build
-curl --fail http://localhost:17171/healthz
+make setup
+make doctor
+make check
+make coverage
+make up
+make health
 ```
 
-Tests use temporary directories and the separate demo, never mutate live mailbox state. Browser verification covers live empty state, populated demo, filters, model edits, cycles, unresolved nodes, narrow viewport, source warnings and safe text rendering. Local development evidence is excluded from the public repository.
+Tests use temporary directories and synthetic data; they never mutate live mailbox state. Workflow tests cover dependency/configuration failures, environment precedence, configuration preservation, setup repeatability and demo isolation. Browser verification covers filters, model edits, cycles, unresolved nodes, narrow viewport, source warnings and safe text rendering. Local development evidence is excluded from the public repository.
 
 ## License
 

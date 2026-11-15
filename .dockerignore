@@ -28,3 +28,5 @@ inbox
 outbox
 archive
 discovery
+
+.coverage-output

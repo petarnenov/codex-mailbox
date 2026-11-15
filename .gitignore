@@ -29,3 +29,6 @@ htmlcov/
 /outbox/
 /archive/
 /discovery/
+
+# Make workflow coverage artifacts
+.coverage-output/
