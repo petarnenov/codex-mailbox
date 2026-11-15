@@ -19,11 +19,11 @@ function matchesTeam(record,team) { const teams=record.teams||[];return !team||(
 function selection() {
  const p=$('project').value,e=$('epic').value,team=$('team').value;
  const issues=data.issues.filter(i=>(!p||i.projects.includes(p))&&(!e||i.epic_keys.includes(e))&&matchesTeam(i,team));
- const tasks=data.tasks.filter(t=>(!p||t.project===p)&&(!e||t.epic_key===e)&&matchesTeam(t,team));
+ const tasks=data.tasks.filter(t=>(!p||t.project===p)&&(!e||(t.epic_keys||[t.epic_key]).includes(e))&&matchesTeam(t,team));
  // Only explicitly team-scoped aggregates can describe a team subset.
  const reported=data.reported_statistics.filter(r=>(!p||!r.project||r.project===p)&&(!e||!r.epic||r.epic===e)&&(!team||((r.teams||[]).length>0&&matchesTeam(r,team))));
- const epics=data.epics.filter(x=>(!e||x.key===e)&&(!(p||team)||issues.some(i=>i.epic_keys.includes(x.key))||tasks.some(t=>t.epic_key===x.key)||reported.some(r=>r.epic===x.key&&(!p||r.project===p))));
- const projects=data.projects.filter(x=>(!p||x.id===p)&&(!team||matchesTeam(x,team)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id))&&(!e||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id&&r.epic===e)));
+ const epics=data.epics.filter(x=>(!e||x.key===e)&&(!(p||team)||issues.some(i=>i.epic_keys.includes(x.key))||tasks.some(t=>(t.epic_keys||[t.epic_key]).includes(x.key))||reported.some(r=>r.epic===x.key&&(!p||r.project===p))));
+ const projects=data.projects.filter(x=>(!p||x.id===p)&&(!team||matchesTeam(x,team)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id))&&(!e||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id&&(t.epic_keys||[t.epic_key]).includes(e))||reported.some(r=>r.project===x.id&&r.epic===e)));
  const complete=(e?data.epics.some(x=>x.key===e)&&data.epics.filter(x=>x.key===e).every(x=>x.scope_complete):data.totals.scope_complete);
  return {p,e,team,issues,tasks,epics,projects,reported,totals:sumMetrics(issues,complete)};
 }
@@ -90,14 +90,59 @@ function renderMap(s) {
  const draw=n=>{const g=svgEl('g');g.append(svgEl('title',{},n.label+' — '+n.detail));g.append(svgEl('rect',{x:n.x,y:n.y,width:205,height:52,rx:6,fill:n.boundary?'#f3f6fa':'#fff',stroke:n.status==='verified_done'?'#8ecab5':'#d5e0ec','stroke-dasharray':n.boundary?'4 3':'none'}));g.append(svgEl('text',{x:n.x+12,y:n.y+21,'font-weight':600},String(n.label).slice(0,29)));g.append(svgEl('text',{x:n.x+12,y:n.y+38,'font-size':9,fill:'#7b8e9e'},String(n.detail).slice(0,34)));svg.append(g);};
  projectPos.forEach(draw);epicPos.forEach(draw);pos.forEach(draw);area.append(svg);
 }
+function executionSummary(tasks) {
+ const counts={};tasks.forEach(t=>{counts[t.status]=(counts[t.status]||0)+1;});
+ return Object.entries(counts).map(([key,value])=>`${value} ${labels[key]||key}`).join(' · ')||'No linked tasks';
+}
+function renderExecution(s) {
+ const area=$('execution-summary');area.replaceChildren();
+ const linked=s.tasks.filter(t=>t.issue_keys.length),epicOnly=s.tasks.filter(t=>t.mapping_kind==='epic');
+ const unresolved=s.tasks.filter(t=>t.mapping_kind==='unresolved'),unmapped=s.tasks.filter(t=>t.mapping_kind==='unmapped');
+ area.append(el('p',`${s.tasks.length} local tasks in selection: ${linked.length} linked to issues · ${epicOnly.length} Epic-level · ${unmapped.length} without mapping. Mapping warnings: ${unresolved.length} tasks with unresolved keys (may also have valid issue links)`));
+ area.append(el('p',`${executionSummary(s.tasks)}. Issue verification remains separate.`, 'muted'));
+ const cards=$('epic-work');cards.replaceChildren();
+ s.epics.forEach(epic=>{
+  const tasks=epicOnly.filter(t=>t.epic_keys.includes(epic.key));if(!tasks.length)return;
+  const card=el('article',undefined,'task');card.append(el('strong',`${epic.key} · Epic-level work`),el('p',executionSummary(tasks)),el('p','These tasks are not allocated to individual issues.'));
+  const details=el('details');details.append(el('summary',`${tasks.length} tasks · show work`));tasks.forEach(t=>details.append(el('p',`${labels[t.status]||t.status} · ${t.title}`)));card.append(details);cards.append(card);
+ });
+}
 function renderIssues(s) {
  const tbody=$('issues');tbody.replaceChildren();$('issue-count').textContent=`${s.issues.length} unique issues`;
- s.issues.forEach(i=>{const row=el('tr'),key=el('td');key.append(el('strong',i.key),el('span',i.title));if(i.conflict)key.append(el('small','Conflicting snapshots — reconcile source'));const members=el('td',i.projects.join(', ')||'Unmapped');members.append(el('small','Team: '+((i.teams||[]).join(', ')||'Unassigned')));members.append(el('small',i.epic_keys.join(', ')));const source=el('td',i.source_status);const local=el('td');local.append(status(i.local_status));const estimate=el('td',range(issueEstimate(i)));estimate.append(el('small',i.estimate?'Explicit estimate':'Model · low / likely / high'));row.append(key,members,source,local,estimate);tbody.append(row);});
+ s.issues.forEach(i=>{
+  const row=el('tr'),key=el('td');key.append(el('strong',i.key),el('span',i.title));
+  if(i.conflict)key.append(el('small','Conflicting snapshots — reconcile source'));
+  const members=el('td',i.projects.join(', ')||'Unmapped');members.append(el('small','Team: '+((i.teams||[]).join(', ')||'Unassigned')),el('small',i.epic_keys.join(', ')));
+  const source=el('td',i.source_status),local=el('td');local.append(status(i.local_status));
+  if(i.recorded_local_status!==i.local_status)local.append(el('small',`Recorded: ${labels[i.recorded_local_status]||i.recorded_local_status}`));
+  const tasks=s.tasks.filter(t=>i.task_ids.includes(t.id));
+  local.append(el('small',`Task execution (filtered): ${executionSummary(tasks)}`),el('small',`${tasks.length} visible / ${i.task_ids.length} required task links (issue-wide)`));
+  if(!i.task_ids.length)local.append(el('small','No issue-level task mapping recorded'));
+  if(i.recorded_local_status==='pending'&&tasks.some(t=>t.status!=='pending'))local.append(el('small','Linked tasks show activity; recorded issue status is Pending.'));
+  const details=el('details');details.append(el('summary','Verification & linked work'));
+  details.append(el('p',`Issue-wide verification: ${i.verification_reason}`));
+  if(i.recorded_verification_reason)details.append(el('p','Recorded verification note: '+i.recorded_verification_reason));
+  tasks.forEach(t=>details.append(el('p',`${labels[t.status]||t.status} · ${t.title} · ${t.evidenced?'completion evidence recorded':'completion evidence pending'} · ${t.id}`)));
+  if(i.task_execution.missing.length)details.append(el('p','Missing task records: '+i.task_execution.missing.join(', ')));
+  details.append(el('p',`Issue updated: ${i.updated_at||'Timestamp unavailable'}`),el('p','Sources: '+i.sources.join(', ')));local.append(details);
+  const estimate=el('td',range(issueEstimate(i)));estimate.append(el('small',i.estimate?'Explicit estimate':'Model · low / likely / high'));row.append(key,members,source,local,estimate);tbody.append(row);
+ });
  if(!s.issues.length){const r=el('tr'),c=el('td');c.colSpan=5;empty(c,'No issues in this view','No imported scope is not zero progress. Add an Epic snapshot or explore the isolated demo.');r.append(c);tbody.append(r);}
 }
-function renderTasks(s) {const area=$('tasks');area.replaceChildren();$('task-count').textContent=`${s.tasks.length} local tasks`;s.tasks.forEach(t=>{const c=el('article',undefined,'task');c.append(el('strong',t.title),status(t.status),el('p',`${t.project} · ${(t.teams||[]).join(', ')||'Unassigned'} · ${t.issue_key||'No Jira mapping'}`),el('p',`${t.evidenced?'Completion evidence recorded':'Not verified'} · ${t.id}`));area.append(c);});if(!s.tasks.length)empty(area,'No local tasks yet','Tasks appear here even before they are mapped to Jira.');}
+function renderTasks(s) {
+ const area=$('tasks');area.replaceChildren();$('task-count').textContent=`${s.tasks.length} local tasks`;
+ s.tasks.forEach(t=>{
+  const card=el('article',undefined,'task');
+  const mapping=t.mapping_kind==='epic'?`Epic-level: ${t.epic_keys.join(', ')} · no issue allocation`:t.issue_keys.length?`Issues: ${t.issue_keys.join(', ')}`:'No issue mapping';
+  card.append(el('strong',t.title),status(t.status),el('p',`${t.project} · ${(t.teams||[]).join(', ')||'Unassigned'} · ${mapping}`));
+  if(t.unresolved_issue_keys.length)card.append(el('p','Unresolved keys: '+t.unresolved_issue_keys.join(', ')));
+  card.append(el('p',`${t.evidenced?'Completion evidence recorded':'Completion evidence pending'} · task only; issue verification is separate`),el('p',t.id),el('p',`Updated: ${t.updated_at||'Timestamp unavailable'} · ${t.source}`));
+  if(t.blockers.length)card.append(el('p','Blockers: '+t.blockers.join(', ')));area.append(card);
+ });
+ if(!s.tasks.length)empty(area,'No local tasks yet','Tasks appear here even before they are mapped to Jira.');
+}
 function renderReported(s) {const area=$('reported');area.replaceChildren();const items=s.reported;items.forEach(r=>{const d=el('details');d.append(el('summary',`${r.project||'All projects'} / ${r.epic||'Project snapshot'} · ${r.source}`),el('p',r.updated_at?'Updated '+r.updated_at:'Timestamp unavailable','muted'),el('pre',JSON.stringify(r.values,null,2)));area.append(d);});if(!items.length)empty(area,'No aggregate statistics recorded',s.team?'No explicitly team-scoped aggregates match. Whole-project totals are hidden for team filters.':'This panel preserves reported figures separately from verified issue progress.');}
-function render(){if(!data)return;const s=selection();renderMetrics(s);renderProjects(s);renderMap(s);renderIssues(s);renderTasks(s);renderReported(s);$('warnings').replaceChildren(...data.warnings.map(w=>el('li',w)));$('warning-count').textContent=`(${data.warnings.length})`;$('warnings-panel').open=!!data.warnings.length;$('demo-banner').hidden=data.mode!=='demo';$('freshness').textContent=`${data.mode==='demo'?'Demo':'Mailbox'} read ${new Date(data.generated_at).toLocaleTimeString()}`;scenario();}
+function render(){if(!data)return;const s=selection();renderMetrics(s);renderProjects(s);renderMap(s);renderExecution(s);renderIssues(s);renderTasks(s);renderReported(s);$('warnings').replaceChildren(...data.warnings.map(w=>el('li',w)));$('warning-count').textContent=`(${data.warnings.length})`;$('warnings-panel').open=!!data.warnings.length;$('demo-banner').hidden=data.mode!=='demo';$('freshness').textContent=`${data.mode==='demo'?'Demo':'Mailbox'} read ${new Date(data.generated_at).toLocaleTimeString()}`;scenario();}
 function populate(id,items,key,label,all){const select=$(id),previous=select.value;select.replaceChildren();const option=el('option',all);option.value='';select.append(option);items.forEach(item=>{const o=el('option',item[label]);o.value=item[key];select.append(o);});if(items.some(i=>i[key]===previous))select.value=previous;}
 async function load(){const ticket=++request;$('error').hidden=true;$('refresh').disabled=true;const params=new URLSearchParams({mode:$('demo').checked?'demo':'live'});['low','likely','high','review_multiplier'].forEach(k=>params.set(k,$(k).value));try{const response=await fetch('/api/dashboard?'+params);const payload=await response.json();if(!response.ok)throw new Error(payload.error?.message||'Unable to read mailbox');if(ticket!==request)return;data=payload;populate('project',data.projects,'id','name','All projects');populate('epic',data.epics,'key','key','All epics');render();}catch(e){if(ticket!==request)return;$('error').textContent=`Could not refresh: ${e.message}. ${data?'Last successful snapshot is still displayed.':'Check the mailbox mount and try again.'}`;$('error').hidden=false;}finally{if(ticket===request)$('refresh').disabled=false;}}
 function scenario(){const count=Number($('scenario-count').value);const model=data?.estimate_method;if(!model)return;$('scenario-result').textContent=Number.isFinite(count)&&count>=0&&count<=10000?range(Object.fromEntries(['low','likely','high'].map(k=>[k,count*model[k]*model.review_multiplier]))):'Enter a count from 0 to 10,000';}

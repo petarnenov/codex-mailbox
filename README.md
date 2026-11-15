@@ -175,6 +175,16 @@ Otherwise `verified_done` is displayed as awaiting verification. Evidence refere
 
 Progress = verified unique issues / known unique issues, only when scope enumeration is explicitly complete. Missing declared issue records remain visible as placeholders and invalidate scope completeness. Zero issues has no percentage. Overall completeness requires all imported Epics complete; unknown or unimported future scope is not invented. Reported aggregate figures are never merged into this denominator. Project memberships may overlap; do not add project issue counts into the portfolio total.
 
+### Local execution and issue reconciliation
+
+The Tasks page shows **Epic work & issue links** above **Issues & verification**. The summary and task execution counts follow Team/Project/Epic filters. Expand an issue's **Verification & linked work** for required task records, issue-wide verification reason, missing records, timestamp and source path. Recorded issue status and filtered task execution are distinct: activity can exist while the recorded status remains Pending. Verification always evaluates all required tasks, including those outside the current filter.
+
+Links are resolved in both directions before checking completion: issue `task_ids` and `local_task_ids` are combined with task `issue_key` and optional `issue_keys` (a string array for work spanning several issues). Duplicate issue snapshots contribute all their links. A task is counted once per issue and once in the local task summary. Reverse-only unfinished tasks prevent verified completion. Forward-only issue links are also displayed on the task.
+
+Writer contract: set `epic_key` to the Epic; use `issue_key` or `issue_keys` only for the actual issues whose requirements the task contributes to. Record concrete task IDs on those issues when known. Epic preparation without a specific issue allocation must remain Epic-level; the dashboard recognizes legacy `issue_key` equal to a known Epic as Epic-level work, unless that key is also an imported issue. Epic work is never assigned to every child. Unknown keys appear as unresolved mappings and source warnings. Tasks without mappings remain visible separately. The dashboard does not infer mappings from titles/project membership or modify mailbox files.
+
+A completed analysis/design/setup task proves only its stated scope. Update issue `local_status`, criterion evidence and verification only after the orchestrator assesses the work; task completion alone never promotes an issue to Verified done. Source warnings expose missing referenced tasks and unknown keys, while issue rows explicitly show zero task links. Refresh reads these current local records; it does not fetch Jira or accept verification.
+
 ### Codex estimates
 
 The editable model uses **low / likely / high hours per issue × review multiplier** (defaults 0.5 / 1.5 / 4 × 1.25). These are illustrative assumptions, not benchmark measurements or calibrated forecasts. Explicit `codex_estimate_hours` override the model for an issue. Shared issue estimates are allocated equally across affected projects; unmapped issues remain in the overall total. Low/likely/high are scenario bounds, not statistical confidence intervals.

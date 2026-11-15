@@ -190,7 +190,9 @@ def build_dashboard(root, model=None, mode='live'):
         project(pid)
         tasks.append({'id': data.get('id', path.stem), 'project': pid, 'title': data.get('title', path.stem),
                       'status': data.get('status', 'pending'), 'issue_key': data.get('issue_key'),
-                      'epic_key': data.get('epic_key'), 'depends_on': strings(data.get('depends_on')),
+                      'epic_key': data.get('epic_key'), 'issue_keys': sorted(set(strings(data.get('issue_key')) + strings(data.get('issue_keys')))),
+                      'blockers': strings(data.get('blockers')), 'source': str(path.relative_to(root)),
+                      'depends_on': strings(data.get('depends_on')),
                       'evidenced': data.get('status') == 'done' and evidence(data),
                       'updated_at': data.get('updated_at'),
                       'teams': record_teams(data, projects[pid]['teams']),
@@ -237,12 +239,22 @@ def build_dashboard(root, model=None, mode='live'):
         for item in items:
             item = dict(item)
             item['_epic'] = key
+            item['_source'] = str(issue_path.relative_to(root))
             raw_issues.append(item)
         for missing_key in missing:
             raw_issues.append({'key': missing_key, '_epic': key, '_missing': True})
         progress_path = folder / 'progress.json'
         if progress_path.exists():
             reported_stats(read_json(root, progress_path, warnings), str(progress_path.relative_to(root)), epic_key=key)
+    # Resolve both directions and every duplicate snapshot before verification.
+    links = {}
+    for item in raw_issues:
+        key = item.get('key', item.get('issue_key'))
+        links.setdefault(key, set()).update(strings(item.get('task_ids')) + strings(item.get('local_task_ids')))
+    for task in tasks:
+        for key in task['issue_keys']:
+            if key in links:
+                links[key].add(task['id'])
     issues = {}
     for item in raw_issues:
         key = item.get('key', item.get('issue_key'))
@@ -252,7 +264,7 @@ def build_dashboard(root, model=None, mode='live'):
         pids = sorted(set(strings(item.get('projects', item.get('affected_projects')))))
         for pid in pids:
             project(pid)
-        linked = strings(item.get('task_ids', item.get('local_task_ids')))
+        linked = sorted(links[key])
         status = item.get('local_status', 'pending')
         if status not in STATUSES:
             status = 'pending'
@@ -263,7 +275,10 @@ def build_dashboard(root, model=None, mode='live'):
         if isinstance(source_status, dict):
             source_status = source_status.get('name', 'Unknown')
         normalized = {'key': key, 'title': item.get('title', item.get('summary', key)), 'epic_keys': [item['_epic']],
-                      'projects': pids, 'local_status': status, 'source_status': str(source_status), 'verified': verified,
+                      'projects': pids, 'local_status': status, 'recorded_local_status': item.get('local_status', 'pending'),
+                      'recorded_verification_reason': item.get('verification', {}).get('reason', '') if isinstance(item.get('verification'), dict) else '',
+                      'sources': strings(item.get('_source')), 'updated_at': item.get('updated_at'),
+                      'source_status': str(source_status), 'verified': verified,
                       'dependencies': strings(item.get('depends_on', item.get('dependencies'))), 'task_ids': linked,
                       'estimate': estimate_range(item.get('codex_estimate_hours')),
                       'actual_machine_hours': item.get('actual_machine_hours') if number(item.get('actual_machine_hours')) else None,
@@ -273,17 +288,56 @@ def build_dashboard(root, model=None, mode='live'):
             issues[key] = normalized
         else:
             previous = issues[key]
-            for field in ('projects', 'epic_keys', 'dependencies', 'task_ids', 'teams'):
+            for field in ('projects', 'epic_keys', 'dependencies', 'task_ids', 'teams', 'sources'):
                 previous[field] = sorted(set(previous[field] + normalized[field]))
             if any(previous[k] != normalized[k] for k in ('local_status', 'verified', 'estimate', 'actual_machine_hours')):
                 previous.update(verified=False, local_status='awaiting_verification', conflict=True, estimate=None, actual_machine_hours=None)
                 warnings.append(f'{key}: conflicting snapshots; verification and estimates require reconciliation')
     issue_list = list(issues.values())
+    epic_keys = {e['key'] for e in epics}
+    for issue in issue_list:
+        linked = [task_map[t] for t in issue['task_ids'] if t in task_map]
+        missing = [t for t in issue['task_ids'] if t not in task_map]
+        unevidenced = [t['id'] for t in linked if not t['evidenced']]
+        counts = dict(Counter(t['status'] for t in linked))
+        issue['task_execution'] = {'total': len(issue['task_ids']), 'counts': counts,
+                                   'missing': missing, 'without_completion_evidence': unevidenced}
+        issue['execution_status'] = ('blocked' if counts.get('blocked') else
+                                     'in_progress' if counts.get('in_progress') else
+                                     'awaiting_verification' if linked and all(t['status'] == 'done' for t in linked) and not missing else
+                                     'pending')
+        if issue['conflict']:
+            reason = 'Conflicting issue snapshots require reconciliation.'
+        elif issue['verified']:
+            reason = 'Passing issue verification and required task evidence recorded.'
+        elif missing or unevidenced:
+            reason = 'Required tasks missing or without completion evidence: ' + ', '.join(missing + unevidenced)
+        elif linked:
+            reason = 'Task execution recorded; issue acceptance verification is not yet passed.'
+        else:
+            reason = 'No issue-level tasks linked; acceptance verification is not yet passed.'
+        issue['verification_reason'] = reason
+        if missing:
+            warnings.append(f"{issue['key']}: referenced tasks missing: {', '.join(missing)}")
     for task in tasks:
+        # An issue-side link is equally authoritative, including forward-only links.
+        task['declared_issue_keys'] = task['issue_keys']
+        task['unresolved_issue_keys'] = [key for key in task['declared_issue_keys'] if key not in issues and key not in epic_keys]
+        task['issue_keys'] = sorted({i['key'] for i in issue_list if task['id'] in i['task_ids']})
+        task['mapping_kind'] = 'issue' if task['issue_keys'] else 'epic' if task['issue_key'] in epic_keys or task['epic_key'] in epic_keys else 'unmapped'
+        if task['mapping_kind'] == 'epic' and not task['epic_key']:
+            task['epic_key'] = task['issue_key']
+        if task['unresolved_issue_keys']:
+            task['mapping_kind'] = 'unresolved'
+            warnings.append(f"{task['id']}: unresolved issue mapping {', '.join(task['unresolved_issue_keys'])}")
+        if not task['epic_key'] and task['issue_keys']:
+            memberships = sorted({e for key in task['issue_keys'] for e in issues[key]['epic_keys']})
+            if len(memberships) == 1:
+                task['epic_key'] = memberships[0]
+        task['epic_keys'] = sorted(set(strings(task['epic_key'])) | {e for key in task['issue_keys'] for e in issues[key]['epic_keys']})
         inherit = task.pop('_inherit_teams')
-        linked_issue = issues.get(task['issue_key'])
-        if inherit and linked_issue is not None:
-            task['teams'] = linked_issue['teams']
+        if inherit and task['issue_keys']:
+            task['teams'] = sorted({team for key in task['issue_keys'] for team in issues[key]['teams']})
     complete = bool(epics) and all(e['scope_complete'] for e in epics) and not any(i['missing_record'] for i in issue_list)
     for e in epics:
         selected = [i for i in issue_list if e['key'] in i['epic_keys']]
