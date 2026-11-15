@@ -87,6 +87,25 @@ function renderProcess(s) {
  const queue=$('verification-queue');queue.replaceChildren();const pending=s.issues.filter(i=>getDelivery(i).stage==='verification'||i.local_status==='awaiting_verification');compactIssueCards(queue,pending,issue=>{const d=getDelivery(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),ownershipRoles(issue),el('p',criteriaSummary(d)),el('p','Verifier: '+(d.verification.verifier||'Unknown')),el('p',d.verification.reason));return card;});if(!pending.length)queue.append(el('p','No matching issues await recorded verification.','muted'));
 }
 function criteriaSummary(delivery) {return delivery.criteria.length?`${delivery.criteria.filter(c=>Array.isArray(c.evidence)&&c.evidence.length).length} / ${delivery.criteria.length} criteria have recorded evidence; individual outcomes remain explicit.`:'Criteria coverage unknown — no structured criterion evidence recorded.';}
+function sourceCriteria(text) {
+ const source=String(text||'').replace(/\r\n?/g,'\n');
+ const starts=[...source.matchAll(/^\s*\d+[:.)]\s+[^\n]+/gm)];
+ if(!starts.length)return {context:'',items:source.split(/\n\s*\n|\n(?=\s*[-*•]\s)/).filter(t=>t.trim()).map(text=>({text:text.trim(),status:'not assessed',evidence:[]}))};
+ return {context:source.slice(0,starts[0].index).trim(),items:starts.map((match,index)=>({text:source.slice(match.index,starts[index+1]?.index??source.length).trim(),status:'not assessed',evidence:[]}))};
+}
+function criterionContent(target,text) {
+ const lines=String(text||'Criterion text unavailable').split('\n');
+ const numbered=lines[0].match(/^\s*\d+[:.)]\s+(.+)$/);
+ if(numbered){target.append(el('h4',numbered[1],'acceptance-title'));lines.shift();}
+ const steps=el('div',undefined,'acceptance-steps');
+ lines.forEach(line=>{
+  if(!line.trim())return;
+  const match=line.match(/^\s*(Given|When|Then|And|But)\b\s*(.*)$/i);
+  if(match){const step=el('div',undefined,'acceptance-step');step.dataset.keyword=match[1].toLowerCase();step.append(el('span',match[1],'acceptance-keyword'),el('p',match[2]));steps.append(step);}
+  else steps.append(el('p',line,'acceptance-note'));
+ });
+ target.append(steps);
+}
 function timestampDescription(value,now=Date.now()) {
  if(value===null||value===undefined||value==='')return 'Timestamp unavailable';
  const match=typeof value==='string'&&value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):?(\d{2}))$/);
@@ -116,11 +135,15 @@ function renderIssueDetail(key) {
  const acceptance=addDetailSection(body,'Acceptance criteria');
  acceptance.append(el('span','DEFINITION OF DONE','detail-eyebrow'));
  const structured=d.criteria.length>0;
- const criteria=structured?d.criteria:(d.acceptance_criteria?String(d.acceptance_criteria).split(/\n\s*\n|\n(?=\s*(?:[-*•]|\d+[.)])\s)/).filter(text=>text.trim()).map(text=>({text:text.trim(),status:'not assessed',evidence:[]})):[]);
+ const source=sourceCriteria(d.acceptance_criteria);
+ const criteria=structured?d.criteria:source.items;
  const covered=d.criteria.filter(c=>Array.isArray(c.evidence)&&c.evidence.length).length;
  const overview=el('div',undefined,'acceptance-overview');
- overview.append(el('strong',structured?`${covered} / ${criteria.length}`:String(criteria.length)),el('span',structured?'criteria with recorded evidence':'source excerpts · outcomes not assessed'));
- acceptance.append(overview,el('p',criteriaSummary(d),'acceptance-caption'));
+ overview.append(el('strong',structured?`${covered} / ${criteria.length}`:String(criteria.length)),el('span',structured?'criteria with recorded evidence':'source scenarios'));
+ acceptance.append(overview);
+ if(structured)acceptance.append(el('p',criteriaSummary(d),'acceptance-caption'));
+ else acceptance.append(el('p','Scenario outcomes have not been assessed.','acceptance-caption'));
+ if(!structured&&source.context)acceptance.append(el('p',source.context,'acceptance-context'));
  const list=el('div',undefined,'acceptance-list');acceptance.append(list);
  criteria.forEach((criterion,index)=>{
   const evidence=Array.isArray(criterion.evidence)?criterion.evidence:[],status=String(criterion.status||'unknown');
@@ -128,9 +151,9 @@ function renderIssueDetail(key) {
   const row=el('article',undefined,'acceptance-card');row.dataset.outcome=tone;
   const heading=el('div',undefined,'acceptance-card-heading');
   heading.append(el('span',String(index+1).padStart(2,'0'),'acceptance-number'),el('span',(tone==='passed'?'✓ ':tone==='failed'?'! ':'○ ')+(structured?'Recorded: '+status:'Not assessed'),'acceptance-status'));
-  row.append(heading,el('p',criterion.text||'Criterion text unavailable','acceptance-text'));
+  row.append(heading);criterionContent(row,criterion.text);
   if(evidence.length){const audit=el('details',undefined,'acceptance-evidence');audit.append(el('summary',`Evidence · ${evidence.length} reference${evidence.length===1?'':'s'}`));addEvidence(audit,evidence);row.append(audit);}
-  else row.append(el('span','No criterion evidence recorded','acceptance-missing'));
+  else if(structured)row.append(el('span','No criterion evidence recorded','acceptance-missing'));
   list.append(row);
  });
  if(!criteria.length)acceptance.append(el('p','Original acceptance criteria unavailable.','acceptance-empty'));

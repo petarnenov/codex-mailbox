@@ -147,3 +147,15 @@ header{position:sticky;top:0;z-index:20;min-height:76px;height:auto;flex-wrap:wr
 #issue-detail .acceptance-original{margin-top:18px;border-top:1px solid var(--detail-border);padding-top:14px}
 #issue-detail .acceptance-original p{white-space:pre-wrap}
 @media(max-width:650px){#issue-detail .acceptance-card{padding:15px}#issue-detail .acceptance-card>.acceptance-text{font-size:13px}}
+
+#issue-detail .acceptance-title{font-size:15px;line-height:1.6;margin:14px 0;color:var(--detail-text);overflow-wrap:anywhere}
+#issue-detail .acceptance-steps{display:grid;gap:7px;margin-top:12px}
+#issue-detail .acceptance-step{display:grid;grid-template-columns:54px minmax(0,1fr);gap:12px;padding:9px 12px;border-radius:7px;background:var(--detail-bg);align-items:baseline}
+#issue-detail .acceptance-keyword{font-size:10px;text-transform:uppercase;font-weight:750;letter-spacing:.6px;color:var(--detail-muted)}
+#issue-detail .acceptance-step[data-keyword=when] .acceptance-keyword{color:var(--detail-blue)}
+#issue-detail .acceptance-step[data-keyword=then]{border-left:2px solid var(--detail-cyan)}
+#issue-detail .acceptance-step[data-keyword=then] .acceptance-keyword{color:var(--detail-cyan)}
+#issue-detail .acceptance-step p{margin:0;font-size:12px;line-height:1.7;color:var(--detail-text);overflow-wrap:anywhere}
+#issue-detail .acceptance-note{margin:4px 0;font-size:12px;white-space:pre-wrap}
+#issue-detail .acceptance-context{padding:10px 14px;border-left:2px solid var(--detail-blue);white-space:pre-wrap}
+@media(max-width:650px){#issue-detail .acceptance-step{grid-template-columns:44px minmax(0,1fr);gap:7px;padding:8px}#issue-detail .acceptance-title{font-size:14px}}
