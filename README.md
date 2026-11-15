@@ -1,21 +1,49 @@
-# Mailbox dashboard
+# Codex mailbox
 
-A local, read-only delivery dashboard for every project with statistics in `codex-mailbox`. Python standard-library backend, buildless HTML/CSS/JavaScript frontend, one Docker container. No runtime package dependencies and no Jira connection or writes.
+The dashboard is the built-in web interface for the `codex-mailbox` coordination workspace. It displays local project, Epic, issue and task snapshots at **http://localhost:17171**. Python standard-library backend, buildless HTML/CSS/JavaScript frontend, one Docker container. No runtime package dependencies and no Jira connection or writes.
+
+## Part of the mailbox workspace
+
+The dashboard is a component of **codex-mailbox**, not a separately managed project. Do not add it to `projects.json` or create a project/session registration for it. The registry lists the projects whose work the mailbox coordinates; the dashboard displays their records.
+
+In an existing mailbox workspace, keep the dashboard code under `dashboard/`:
+
+```text
+codex-mailbox/
+├── README.md
+├── projects.json
+├── projects/
+├── epics/
+├── tasks/
+├── sessions/
+├── inbox/
+├── outbox/
+├── archive/
+└── dashboard/          # this component's source checkout
+    ├── server.py
+    ├── static/
+    ├── tests/
+    ├── demo/
+    ├── compose.yaml
+    └── .env            # local configuration, ignored by Git
+```
+
+Run Compose from `dashboard/` and set `MAILBOX_ROOT` to the parent mailbox directory. The source checkout is scoped to the component so private coordination records remain outside the published files. Runtime data stays local and is mounted read-only.
 
 ## Start
 
-Requirements: Docker with Compose. Clone this **application** into its own directory; keep your mailbox **data** in a separate existing directory.
+Requirements: Docker with Compose and an existing mailbox workspace. From that workspace directory, install the component if `dashboard/` is not already present:
 
 ```sh
-git clone https://github.com/petarnenov/codex-mailbox.git
-cd codex-mailbox
+git clone https://github.com/petarnenov/codex-mailbox.git dashboard
+cd dashboard
 cp .env.example .env
 ```
 
-Edit `.env` and set `MAILBOX_ROOT` to the absolute path of your mailbox data directory. It should contain `projects.json` and any `projects/`, `epics/` or `tasks/` snapshots. The application repository is not the mailbox data directory. Do not copy private data or session records into the repository.
+If it is already present, simply run `cd dashboard` from the mailbox workspace. Edit `.env` and set `MAILBOX_ROOT` to the **absolute path of the parent mailbox workspace**. That directory contains `projects.json` and the available `projects/`, `epics/` and `tasks/` snapshots.
 
 ```sh
-docker compose up -d --build
+docker compose --project-name mailbox-dashboard up -d --build
 ```
 
 Open **http://localhost:17171**. The service is published only on `127.0.0.1`, runs as an unprivileged user with a read-only root filesystem, and mounts the configured data directory at `/data:ro`. Compose requires an explicit `MAILBOX_ROOT`; it will not silently mount a guessed location.
@@ -38,7 +66,7 @@ Refresh reads current files; no background watcher or Jira synchronization is in
 
 Dark theme is the default on a fresh visit. The header theme toggle offers light mode and remembers an explicit choice locally; a blocking head script selects it before the stylesheet paints.
 
-The sticky header contains five page tabs: **Overview**, **Dependencies**, **Tasks**, **Estimates**, and **Sources**. Only the active page is displayed. Filters remain selected across tabs. URLs such as `/#dependencies` are shareable local deep links; browser back/forward restores the selected page. Arrow keys, Home and End navigate tabs. On narrow screens only the tab strip scrolls horizontally.
+The sticky header contains five page tabs: **Overview**, **Dependencies**, **Tasks**, **Estimates**, and **Sources**. Only the active page is displayed. The shared **Team** filter offers **All teams**, **BE**, **FE**, **QA**, and **Unassigned** on every page. It combines with Project and Epic and remains selected across tabs and data refreshes. URLs such as `/#dependencies` are shareable local deep links; browser back/forward restores the selected page. Arrow keys, Home and End navigate tabs. On narrow screens only the tab strip scrolls horizontally.
 
 ## What the dashboard shows
 
@@ -96,6 +124,14 @@ Aliases: `issue_key`, `summary`, `affected_projects`, `local_task_ids`, `jira_st
 
 `epics/<key>/progress.json`: preserved reported fields `metrics`, `statistics`, `progress`, `totals`, `counts`, `percent`, status counts, scope completeness, `estimate`, `machine_hours`. Nested project aggregates may use `per_project`, `project_metrics`, or `projects` as an object keyed by project ID, or a list of objects with `project` / `id`. Project snapshots support the same fields. No estimate is inferred from story points or ordinary Jira hours.
 
+### Team classification and filtering
+
+Projects, issues and tasks may declare `"team":"FE"` or `"teams":["BE","FE"]`. Accepted aliases include backend/back-end, frontend/front-end and quality assurance (case-insensitive). Explicit metadata overrides inferred classification; an explicit empty list remains unassigned. Duplicate issue snapshots combine team membership.
+
+Without metadata, titles mentioning test, tests, testing, QA or quality assurance belong to **QA**, including development test tasks. Otherwise prefixes UI/FE/Frontend/Front-end belong to **FE** and DEV/BE/Backend/Back-end to **BE**. Testing takes precedence over development prefixes. Tasks with no title classification inherit their linked issue team. Remaining records use project ownership: `frontend` is FE; `geowealth`, `admin-center`, `identity-service` and `user-context` are BE. Other projects remain unassigned unless configured with explicit team metadata. This is a display inference, not an update to source snapshots or Jira.
+
+Team selection filters issues, tasks, related Epics, project cards, graph and modeled estimates together. QA work remains visible within a BE-owned project. Cross-team issues count once in the selected total; project estimate allocation retains its original membership split. Dependencies outside the selection remain labeled boundary nodes. Whole-project reported estimates/actuals on project cards are hidden under a team filter. Aggregate snapshots are also hidden unless a snapshot explicitly declares matching team metadata. Data-quality warnings cover all sources, and the hypothetical calculator remains an independent all-team scenario.
+
 ### Verification and scope
 
 An issue is verified only if:
@@ -121,7 +157,7 @@ Only known enumerated scope is modeled. Incomplete scope is labeled a known subs
 - `GET /healthz` → `{"status":"ok"}` (process health, not a claim that mailbox data is valid).
 - `GET /api/dashboard?mode=live` → `generated_at`, `mode`, `warnings`, `projects`, `epics`, `issues`, `tasks`, `dependencies`, `task_dependencies`, `external_dependencies`, `reported_statistics`, `totals`, `estimate_method`.
 - Optional numeric query fields: `low`, `likely`, `high`, `review_multiplier`. Require `0 ≤ low ≤ likely ≤ high ≤ 1000` and `1 ≤ review_multiplier ≤ 1000`.
-- `mode=demo` selects the isolated demo fixture. Project/Epic filtering is browser-local; API returns the full snapshot.
+- `mode=demo` selects the isolated demo fixture. Team/Project/Epic filtering is browser-local; API returns the full snapshot.
 - Errors: `{"error":{"code":"...","message":"..."}}`. Mutations return 405. Static assets are allowlisted. No arbitrary file-serving endpoint.
 
 ## Validation

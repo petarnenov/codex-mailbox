@@ -2,6 +2,7 @@
 import json
 import math
 import os
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +30,37 @@ def strings(value):
     if isinstance(value, str):
         return [value]
     return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+
+
+TEAM_ALIASES = {'be': 'BE', 'backend': 'BE', 'back-end': 'BE',
+                'fe': 'FE', 'frontend': 'FE', 'front-end': 'FE',
+                'qa': 'QA', 'quality assurance': 'QA'}
+PROJECT_TEAMS = {'frontend': ['FE'], 'geowealth': ['BE'], 'admin-center': ['BE'],
+                 'identity-service': ['BE'], 'user-context': ['BE']}
+
+
+def explicit_teams(record):
+    value = record.get('teams', record.get('team'))
+    if not isinstance(value, (str, list)):
+        return None
+    return sorted({TEAM_ALIASES[v.strip().lower()] for v in strings(value)
+                   if v.strip().lower() in TEAM_ALIASES})
+
+
+def title_teams(record):
+    title = str(record.get('title', record.get('summary', ''))).strip()
+    if re.search(r'\b(?:tests?|testing|qa|quality[ -]assurance)\b', title, re.I):
+        return ['QA']
+    if re.match(r'^\[?(?:UI|FE|frontend|front-end)\b', title, re.I):
+        return ['FE']
+    if re.match(r'^\[?(?:DEV|BE|backend|back-end)\b', title, re.I):
+        return ['BE']
+    return None
+
+
+def record_teams(record, fallback):
+    explicit = explicit_teams(record)
+    return explicit if explicit is not None else title_teams(record) or fallback
 
 
 def read_json(root, path, warnings):
@@ -98,7 +130,7 @@ def build_dashboard(root, model=None, mode='live'):
         if pid == 'orchestrator':
             name = 'Mailbox coordination'
         entry = projects.setdefault(pid, {'id': pid, 'name': name or pid, 'registered': False, 'kind': 'coordination' if pid == 'orchestrator' else 'project',
-                                         'reported_estimate': None, 'reported_actual_machine_hours': None})
+                                         'reported_estimate': None, 'reported_actual_machine_hours': None, 'teams': PROJECT_TEAMS.get(pid, [])})
         if registered:
             entry.update(name=name or pid, registered=True)
         return entry
@@ -111,7 +143,8 @@ def build_dashboard(root, model=None, mode='live'):
                  'completion_percentage', 'scope_complete', 'enumeration_complete', 'estimate', 'machine_hours') if k in data}
         if stats:
             reported.append({'source': source, 'project': project_id, 'epic': epic_key,
-                             'updated_at': data.get('generated_at', data.get('updated_at')), 'values': stats})
+                             'updated_at': data.get('generated_at', data.get('updated_at')), 'values': stats,
+                             'teams': explicit_teams(data) or []})
         for field in ('per_project', 'project_metrics', 'projects'):
             children = data.get(field)
             if isinstance(children, dict):
@@ -132,7 +165,9 @@ def build_dashboard(root, model=None, mode='live'):
 
     inventory = read_json(root, root / 'projects.json', warnings)
     for item in records(inventory, 'projects'):
-        project(item.get('id'), item.get('name'), True)
+        entry = project(item.get('id'), item.get('name'), True)
+        if entry is not None and explicit_teams(item) is not None:
+            entry['teams'] = explicit_teams(item)
     for path in sorted((root / 'projects').glob('*.json')):
         data = read_json(root, path, warnings)
         if isinstance(data, dict):
@@ -140,7 +175,9 @@ def build_dashboard(root, model=None, mode='live'):
             if not isinstance(pid, str) or not pid:
                 warnings.append(f'{path.name}: invalid project id')
                 continue
-            project(pid, data.get('name'))
+            entry = project(pid, data.get('name'))
+            if explicit_teams(data) is not None:
+                entry['teams'] = explicit_teams(data)
             reported_stats(data, str(path.relative_to(root)), pid)
     for path in sorted((root / 'tasks').glob('*/*.json')):
         data = read_json(root, path, warnings)
@@ -155,7 +192,9 @@ def build_dashboard(root, model=None, mode='live'):
                       'status': data.get('status', 'pending'), 'issue_key': data.get('issue_key'),
                       'epic_key': data.get('epic_key'), 'depends_on': strings(data.get('depends_on')),
                       'evidenced': data.get('status') == 'done' and evidence(data),
-                      'updated_at': data.get('updated_at')})
+                      'updated_at': data.get('updated_at'),
+                      'teams': record_teams(data, projects[pid]['teams']),
+                      '_inherit_teams': explicit_teams(data) is None and title_teams(data) is None})
     task_map = {t['id']: t for t in tasks}
     for folder in sorted((root / 'epics').glob('*')):
         if not folder.is_dir():
@@ -228,17 +267,23 @@ def build_dashboard(root, model=None, mode='live'):
                       'dependencies': strings(item.get('depends_on', item.get('dependencies'))), 'task_ids': linked,
                       'estimate': estimate_range(item.get('codex_estimate_hours')),
                       'actual_machine_hours': item.get('actual_machine_hours') if number(item.get('actual_machine_hours')) else None,
-                      'missing_record': item.get('_missing', False), 'conflict': False}
+                      'missing_record': item.get('_missing', False), 'conflict': False,
+                      'teams': record_teams(item, sorted({team for pid in pids for team in projects[pid]['teams']}))}
         if key not in issues:
             issues[key] = normalized
         else:
             previous = issues[key]
-            for field in ('projects', 'epic_keys', 'dependencies', 'task_ids'):
+            for field in ('projects', 'epic_keys', 'dependencies', 'task_ids', 'teams'):
                 previous[field] = sorted(set(previous[field] + normalized[field]))
             if any(previous[k] != normalized[k] for k in ('local_status', 'verified', 'estimate', 'actual_machine_hours')):
                 previous.update(verified=False, local_status='awaiting_verification', conflict=True, estimate=None, actual_machine_hours=None)
                 warnings.append(f'{key}: conflicting snapshots; verification and estimates require reconciliation')
     issue_list = list(issues.values())
+    for task in tasks:
+        inherit = task.pop('_inherit_teams')
+        linked_issue = issues.get(task['issue_key'])
+        if inherit and linked_issue is not None:
+            task['teams'] = linked_issue['teams']
     complete = bool(epics) and all(e['scope_complete'] for e in epics) and not any(i['missing_record'] for i in issue_list)
     for e in epics:
         selected = [i for i in issue_list if e['key'] in i['epic_keys']]

@@ -1,7 +1,7 @@
 {
   "projects": [
-    {"id": "atlas", "name": "Atlas Refresh"},
-    {"id": "beacon", "name": "Beacon Data"},
-    {"id": "cinder", "name": "Cinder Portal"}
+    {"id": "atlas", "name": "Atlas Refresh", "team": "BE"},
+    {"id": "beacon", "name": "Beacon Data", "team": "FE"},
+    {"id": "cinder", "name": "Cinder Portal", "team": "QA"}
   ]
 }
