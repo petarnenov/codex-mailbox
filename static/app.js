@@ -20,6 +20,9 @@ function sumMetrics(items,complete) {
  items.forEach(i=>{ const e=issueEstimate(i);Object.keys(e).forEach(k=>{estimate[k]+=e[k];if(!i.verified)remaining[k]+=e[k];});if(i.actual_machine_hours!==null){measured++;actual+=i.actual_machine_hours;} });
  return {known_issues:items.length,verified_issues:verified,percent:complete&&items.length?Math.round(verified/items.length*1000)/10:null,estimate:items.length?estimate:null,remaining_estimate:items.length?remaining:null,actual_machine_hours:measured?actual:null,measured_issues:measured,scope_complete:complete};
 }
+const openTaskStatuses=['pending','in_progress','blocked'];
+function isOpenFreeTextTask(record) {return record.mapping_kind==='unmapped'&&openTaskStatuses.includes(record.status);}
+function freeTextProcessGroup(task) {return task.status==='blocked'||(task.blockers||[]).length?'blocked':task.status==='in_progress'?'now':'next';}
 function matchesTeam(record,team) { const teams=record.teams||[];return !team||(team==='unassigned'?teams.length===0:teams.includes(team)); }
 function selection() {
  const p=$('project').value,e=$('epic').value,team=$('team').value,q=$('search').value.trim().toLowerCase();
@@ -83,8 +86,19 @@ function compactIssueCards(area,issues,makeCard) {
 function renderProcess(s) {
  const strip=$('process-strip');strip.replaceChildren();Object.entries(processStages).forEach(([stage,label])=>{const count=s.issues.filter(i=>getDelivery(i).stage===stage).length,box=el('div',undefined,'process-stage');box.dataset.stage=stage;box.append(el('strong',String(count)),el('span',label));strip.append(box);});
  const groups={now:[],blocked:[],next:[]};s.issues.forEach(issue=>{const d=getDelivery(issue);if(d.blocked)groups.blocked.push(issue);else if(['investigating','implementation','review','verification'].includes(d.stage))groups.now.push(issue);else if(d.stage!=='complete')groups.next.push(issue);});
- Object.entries(groups).forEach(([group,issues])=>{const area=$('process-'+group);area.replaceChildren();compactIssueCards(area,issues,issue=>{const d=getDelivery(issue),marker=stageMarker(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),el('span',marker.label,'graph-status marker-'+marker.kind),ownershipRoles(issue),el('p',d.next_action));if(d.blocked)card.append(el('span','! Blocked','graph-status marker-blocked'),el('p','Blockers: '+(d.blockers.join('; ')||'Blocked; reason not recorded'),'process-blocker'));card.append(el('small','Recorded suggestion · dependency gate required'));return card;});if(!issues.length)area.append(el('p','No matching recorded work.','muted'));});
+ Object.entries(groups).forEach(([group,issues])=>{const area=$('process-'+group);area.replaceChildren();compactIssueCards(area,issues,issue=>{const d=getDelivery(issue),marker=stageMarker(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),el('span',marker.label,'graph-status marker-'+marker.kind),ownershipRoles(issue),el('p',d.next_action));if(d.blocked)card.append(el('span','! Blocked','graph-status marker-blocked'),el('p','Blockers: '+(d.blockers.join('; ')||'Blocked; reason not recorded'),'process-blocker'));card.append(el('small','Recorded suggestion · dependency gate required'));return card;});const freeText=s.tasks.filter(t=>isOpenFreeTextTask(t)&&freeTextProcessGroup(t)===group);appendFreeTextTasks(area,freeText);if(!issues.length&&!freeText.length)area.append(el('p','No matching recorded work.','muted'));});
+ renderFreeTextOverview(s);
  const queue=$('verification-queue');queue.replaceChildren();const pending=s.issues.filter(i=>getDelivery(i).stage==='verification'||i.local_status==='awaiting_verification');compactIssueCards(queue,pending,issue=>{const d=getDelivery(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),ownershipRoles(issue),el('p',criteriaSummary(d)),el('p','Verifier: '+(d.verification.verifier||'Unknown')),el('p',d.verification.reason));return card;});if(!pending.length)queue.append(el('p','No matching issues await recorded verification.','muted'));
+}
+function appendFreeTextTasks(area,tasks) {
+ if(!tasks.length)return;area.append(el('p',`${tasks.length} free-text tasks`,'muted'));
+ tasks.forEach(t=>{const card=el('article',undefined,'process-card');card.append(el('strong',taskDisplayTitle(t)),status(t.status),el('p',`${t.project} · Free-text task · ${t.id.slice(0,8)}`));if((t.blockers||[]).length)card.append(el('p','Blockers: '+t.blockers.join('; '),'process-blocker'));area.append(card);});
+}
+function renderFreeTextOverview(s) {
+ const area=$('free-text-tasks'),tasks=s.tasks.filter(t=>t.mapping_kind==='unmapped');area.replaceChildren();
+ $('free-text-count').textContent=tasks.length?`${tasks.length} tasks · ${executionSummary(tasks)}`:'';
+ tasks.forEach(t=>area.append(taskCard(t)));
+ if(!tasks.length)empty(area,'No free-text tasks','Tasks created from free text without a Jira key appear here.');
 }
 function criteriaSummary(delivery) {return delivery.criteria.length?`${delivery.criteria.filter(c=>Array.isArray(c.evidence)&&c.evidence.length).length} / ${delivery.criteria.length} criteria have recorded evidence; individual outcomes remain explicit.`:'Criteria coverage unknown — no structured criterion evidence recorded.';}
 function sourceCriteria(text) {
@@ -228,7 +242,7 @@ function selectGraph(graph,s,mode,includeLocal=true) {
   const contextVisible=contextual&&s.epics.some(e=>(n.epic_keys||[]).includes(e.key));
   const anchor=mode==='execution'&&(epicIds.has(n.id)||projectIds.has(n.id))&&graph.edges.some(e=>e.kind==='requires'&&(e.from===n.id||e.to===n.id));
   const milestone=n.kind==='milestone'&&(!s.p||(n.projects||[]).includes(s.p))&&(!s.e||(n.epic_keys||[]).includes(s.e))&&matchesTeam(n,s.team)&&(!s.q||(n.id+' '+n.label+' '+(n.detail||'')).toLowerCase().includes(s.q));
-  if(issueIds.has(n.id)||(includeLocal&&taskIds.has(n.id))||milestone||contextVisible||anchor||(mode==='hierarchy'&&(projectIds.has(n.id)||epicIds.has(n.id))))selected.add(n.id);
+  if(issueIds.has(n.id)||((includeLocal||isOpenFreeTextTask(n))&&taskIds.has(n.id))||milestone||contextVisible||anchor||(mode==='hierarchy'&&(projectIds.has(n.id)||epicIds.has(n.id))))selected.add(n.id);
  });
  const edges=graph.edges.filter(e=>e.kind===(mode==='hierarchy'?'membership':'requires'));
  const visible=new Set(selected);
@@ -283,13 +297,13 @@ function localWorkGroups(graph,s) {
  graph.nodes.filter(n=>n.kind==='task'&&selected.has(n.id)).forEach(n=>{
   if(n.ready){groups.history.push(n);return;}
   const keys=(n.issue_keys||[]).length?n.issue_keys:n.mapping_kind==='epic'?(n.epic_keys||[]):[];
-  const active=keys.some(key=>{const owner=owners.get(key);return owner&&['in progress','development peer review'].includes(String(owner.source_status||'').toLowerCase());});
+  const active=isOpenFreeTextTask(n)||keys.some(key=>{const owner=owners.get(key);return owner&&['in progress','development peer review'].includes(String(owner.source_status||'').toLowerCase());});
   groups[active?'current':'audit'].push(n);
  });
  return groups;
 }
 function renderLocalWork(groups) {
- [['current','Current local work','Owning Jira work is recorded as active. Expand a local record for its result and evidence.'],['history','Local work history','Only local tasks with verified completion evidence appear here; completion does not imply the owning Jira item is complete.'],['audit','Other local work / audit','Owning Jira activity is unknown or not recorded as active. These records remain inspectable; unverified prerequisites stay on the map.']].forEach(([kind,title,note])=>{
+ [['current','Current local work','Owning Jira work is recorded as active, or the task is an open free-text task without Jira. Expand a local record for its result and evidence.'],['history','Local work history','Only local tasks with verified completion evidence appear here; completion does not imply the owning Jira item is complete.'],['audit','Other local work / audit','Owning Jira activity is unknown or not recorded as active. These records remain inspectable; unverified prerequisites stay on the map.']].forEach(([kind,title,note])=>{
   const area=$('local-work-'+kind);area.replaceChildren();area.append(el('summary',`${title} · ${groups[kind].length}`),el('p',note,'footnote'));
   groups[kind].forEach(n=>{const info=graphIdentity(n),marker=graphMarker(n,(n.unmet_prerequisites||[]).length),detail=el('details',undefined,'graph-record');detail.dataset.nodeId=n.id;const summary=el('summary');summary.append(el('span',marker.label,'graph-status marker-'+marker.kind),document.createTextNode(' '+info.identity+' · '+info.title));detail.append(summary,el('p',info.association),el('p','Full local task ID: '+n.id.replace(/^task:/,'')),el('p','Full recorded title: '+n.label),el('p','Result: '+graphCompletion(n)+' · Recorded status: '+(labels[n.status]||n.status||'Unknown')),el('p','Source: '+(n.source||'Source unavailable')));
    (n.evidence||[]).forEach(item=>detail.append(el('p','Evidence: '+item)));area.append(detail);
@@ -306,8 +320,9 @@ function renderMap(s) {
  const view={nodes:rawView.nodes.filter(n=>kept.has(n.id)),edges:rawView.edges.filter(e=>kept.has(e.from)&&kept.has(e.to))},selected=view.nodes.filter(n=>!n.boundary),boundary=view.nodes.length-selected.length;
  $('focus-summary').textContent=focusId?(rawView.focusMissing?'Focus unavailable: '+focusId:'Focused on '+focusId+' · prerequisites and dependents; outside-filter context does not change totals.'):'No graph focus · showing filtered scope';$('clear-focus').hidden=!focusId;
  const connected=new Set(view.edges.flatMap(e=>[e.from,e.to]));
- const drawing=mode==='execution'?view.nodes.filter(n=>connected.has(n.id)||n.id===focusId):view.nodes;
- $('graph-summary').textContent=`${selected.length} selected records · ${boundary} context records · ${view.edges.length} ${mode==='hierarchy'?'membership links':'prerequisites'}. Context does not change scope totals. ${showLocal?'All local work shown.':`${groups.history.length} verified local tasks in history; ${groups.current.length+groups.audit.length} other local records folded. Unverified prerequisite context stays visible.`}`;
+ const drawing=mode==='execution'?view.nodes.filter(n=>connected.has(n.id)||n.id===focusId||isOpenFreeTextTask(n)):view.nodes;
+ const freeTextShown=view.nodes.filter(isOpenFreeTextTask).length;
+ $('graph-summary').textContent=`${selected.length} selected records · ${boundary} context records · ${view.edges.length} ${mode==='hierarchy'?'membership links':'prerequisites'}. Context does not change scope totals. ${showLocal?'All local work shown.':`${groups.history.length} verified local tasks in history; ${freeTextShown} open free-text tasks shown; ${groups.current.length+groups.audit.length-freeTextShown} other local records folded. Unverified prerequisite context stays visible.`}`;
  if(!drawing.length)empty(area,rawView.focusMissing?'Focused record unavailable':mode==='execution'?'No recorded prerequisites in this selection':'No hierarchy records in this selection',mode==='execution'?'An empty prerequisite list does not establish readiness or completion.':'Choose another filter or import immediate issue parent relationships.');
  else {
   const layout=layoutGraph(drawing,view.edges),svg=svgEl('svg',{width:layout.width,height:layout.height,viewBox:`0 0 ${layout.width} ${layout.height}`,role:'img','aria-label':mode==='hierarchy'?'Issue parent hierarchy':'Layered execution prerequisite map'});
@@ -386,16 +401,18 @@ function renderIssues(s) {
 }
 function renderTasks(s) {
  const area=$('tasks');area.replaceChildren();$('task-count').textContent=`${s.tasks.length} local tasks`;
- s.tasks.forEach(t=>{
+ s.tasks.forEach(t=>area.append(taskCard(t)));
+ if(!s.tasks.length)empty(area,'No local tasks yet','Tasks appear here even before they are mapped to Jira.');
+}
+function taskCard(t) {
   const card=el('article',undefined,'task');
   const mapping=taskAssociation(t);
   card.append(el('p','Local task · '+t.id.slice(0,8),'local-identity'),el('strong',taskDisplayTitle(t)),status(t.status),el('p',`${t.project} · ${(t.teams||[]).join(', ')||'Unassigned'} · ${mapping}`));
   if(t.unresolved_issue_keys.length)card.append(el('p','Unresolved keys: '+t.unresolved_issue_keys.join(', ')));
   card.append(el('p',`${t.evidenced?'Completion evidence recorded':'Completion evidence pending'} · task only; issue verification is separate`),el('p',t.id),el('p',`Updated: ${t.updated_at||'Timestamp unavailable'} · ${t.source}`));
   const original=el('details');original.append(el('summary','Original task record'),el('p','Full local task ID: '+t.id),el('p','Full recorded title: '+t.title),el('p',mapping));card.append(original);
-  if(t.blockers.length)card.append(el('p','Blockers: '+t.blockers.join(', ')));area.append(card);
- });
- if(!s.tasks.length)empty(area,'No local tasks yet','Tasks appear here even before they are mapped to Jira.');
+  if(t.blockers.length)card.append(el('p','Blockers: '+t.blockers.join(', ')));
+  return card;
 }
 function renderReported(s) {const area=$('reported');area.replaceChildren();const items=s.reported;items.forEach(r=>{const d=el('details');d.append(el('summary',`${r.project||'All projects'} / ${r.epic||'Project snapshot'} · ${r.source}`),el('p',r.updated_at?'Updated '+r.updated_at:'Timestamp unavailable','muted'),el('pre',JSON.stringify(r.values,null,2)));area.append(d);});if(!items.length)empty(area,'No aggregate statistics recorded',s.team?'No explicitly team-scoped aggregates match. Whole-project totals are hidden for team filters.':'This panel preserves reported figures separately from verified issue progress.');}
 function render(){if(!data)return;const s=selection();renderMetrics(s);renderProjects(s);renderProcess(s);renderChanges(s);renderMap(s);renderExecution(s);renderIssues(s);renderTasks(s);renderReported(s);$('scope-warning').hidden=!s.invalid.length;$('scope-warning').textContent=s.invalid.length?'Unavailable filter selection: '+s.invalid.join('; ')+'. No scope is shown until the selection is corrected.':'';const warnings=[...(data.warnings||[]),...(data.delivery_warnings||[])];$('warnings').replaceChildren(...warnings.map(w=>el('li',w)));$('warning-count').textContent=`(${warnings.length})`;$('warnings-panel').open=!!warnings.length;$('demo-banner').hidden=data.mode!=='demo';$('freshness').textContent=`${data.mode==='demo'?'Demo':'Mailbox'} read ${timestampDescription(data.generated_at)}`;scenario();}
