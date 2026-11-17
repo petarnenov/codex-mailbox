@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from dependency_graph import build_graph
-from delivery_process import project_delivery
+from delivery_process import STAGES, project_delivery
 
 ROOT = Path(__file__).parent
 STATUSES = ('pending', 'in_progress', 'blocked', 'awaiting_verification', 'verified_done')
@@ -76,6 +76,21 @@ def read_json(root, path, warnings):
     except (OSError, ValueError) as exc:
         warnings.append(f'{path.relative_to(root)}: {exc}')
         return None
+
+
+def task_delivery_stage(root, task_id, warnings):
+    """Process stage of a task from its orchestrator-owned deliveries/<task-id>.json record."""
+    if Path(task_id).name != task_id:
+        return 'unknown'
+    path = root / 'deliveries' / f'{task_id}.json'
+    if not path.is_file():
+        return 'unknown'
+    data = read_json(root, path, warnings)
+    stage = data.get('delivery_stage') if isinstance(data, dict) else None
+    if stage not in STAGES:
+        warnings.append(f'{path.relative_to(root)}: unsupported or missing delivery_stage')
+        return 'unknown'
+    return stage
 
 
 def reported_estimate_hours(record):
@@ -221,6 +236,7 @@ def build_dashboard(root, model=None, mode='live'):
                       'updated_at': data.get('updated_at'),
                       'owner': data.get('owner'),
                       'owner_session_id': data.get('owner_session_id'),
+                      'delivery_stage': task_delivery_stage(root, data.get('id', path.stem), warnings),
                       'teams': record_teams(data, projects[pid]['teams']),
                       '_inherit_teams': explicit_teams(data) is None and title_teams(data) is None})
     task_map = {t['id']: t for t in tasks}

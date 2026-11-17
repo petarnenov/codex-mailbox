@@ -154,6 +154,17 @@ class DashboardBuildTests(Fixture):
         self.assertEqual(['GOOD-1'], [i['key'] for i in data['issues']])
         self.assertTrue(any('invalid keys ignored' in warning for warning in data['warnings']))
 
+    def test_task_delivery_stage_comes_from_its_delivery_record(self):
+        self.put('tasks/p/T1.json', {'id': 'T1', 'status': 'in_progress'})
+        self.put('tasks/p/T2.json', {'id': 'T2', 'status': 'pending'})
+        self.put('tasks/p/T3.json', {'id': 'T3', 'status': 'pending'})
+        self.put('deliveries/T1.json', {'task_id': 'T1', 'delivery_stage': 'implementation'})
+        self.put('deliveries/T3.json', {'task_id': 'T3', 'delivery_stage': 'shipping'})
+        data = server.build_dashboard(self.root, MODEL)
+        stages = {t['id']: t['delivery_stage'] for t in data['tasks']}
+        self.assertEqual({'T1': 'implementation', 'T2': 'unknown', 'T3': 'unknown'}, stages)
+        self.assertIn('deliveries/T3.json: unsupported or missing delivery_stage', data['warnings'])
+
     def test_external_dependencies_and_task_dependencies_are_retained(self):
         self.put('tasks/p/T1.json', {'id': 'T1', 'status': 'pending', 'depends_on': ['T0']})
         self.epic('E', ['A-1'], True, [{'key': 'A-1', 'projects': ['p']}],
