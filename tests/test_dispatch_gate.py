@@ -303,8 +303,8 @@ class DispatchGateTests(unittest.TestCase):
         self.assertFalse(self.validate(result)['allowed'])
         self.assertEqual(before, (self.root / self.task_path).read_bytes())
 
-    def test_input_addition_and_graph_or_task_change_invalidates_receipt(self):
-        for mutation in ('task', 'graph', 'registry', 'addition'):
+    def test_relevant_graph_or_task_change_invalidates_receipt(self):
+        for mutation in ('task', 'graph', 'registry'):
             with self.subTest(mutation=mutation):
                 # Each subcase uses an isolated pending target/envelope and fresh snapshot.
                 case = DispatchGateTests(methodName='test_independent_task_eligible_without_promoting_completion_or_writing')
@@ -313,12 +313,73 @@ class DispatchGateTests(unittest.TestCase):
                     result = case.send()
                     self.assertTrue(result['allowed'], result)
                     if mutation == 'task': case.update_task(title='Changed specification')
-                    elif mutation == 'graph': case.spec([], [])
+                    elif mutation == 'graph':
+                        case.spec([{'id': 'milestone:new', 'status': 'verified',
+                                    'verification': 'passed', 'evidence': ['proof']}],
+                                  [{'from': 'milestone:new', 'to': 'task:' + case.target,
+                                    'kind': 'requires'}])
                     elif mutation == 'registry':
                         value = case.read('projects.json');value['projects'][0]['name'] = 'Changed project';case.put('projects.json', value)
-                    else: case.task()
                     self.assertFalse(case.validate(result)['allowed'])
                 finally: case.tearDown()
+
+    def test_independent_workers_can_claim_and_report_without_staling_other_delivery(self):
+        sibling = self.task(issue_key='A')
+        result = self.send()
+        other = dispatch_gate.dispatch(self.root, f'tasks/p/{sibling}.json', self.endpoint)
+        self.assertTrue(other['allowed'], other)
+        self.assertTrue(dispatch_gate.validate(self.root, other['message_path'], self.endpoint)['allowed'])
+        self.task(sibling, issue_key='A', status='in_progress', owner_session_id=self.endpoint,
+                  evidence=['progress'], updated_at='later')
+        self.assertTrue(self.validate(result)['allowed'])
+        self.task(sibling, issue_key='A', status='done', evidence=['reviewed proof'])
+        self.assertTrue(self.validate(result)['allowed'])
+
+    def test_unrelated_additions_updates_and_deletions_do_not_stale_receipt(self):
+        result = self.send()
+        sibling = self.task()
+        self.put('projects/p.json', {'id': 'p', 'work_status': 'changed'})
+        self.put('epics/E/progress.json', {'generated_at': 'later'})
+        self.epic([{'key': 'A', 'projects': ['p']}, {'key': 'B', 'projects': ['p']}])
+        self.spec([{'id': 'milestone:other', 'status': 'unknown'}],
+                  [{'from': 'milestone:other', 'to': 'issue:B', 'kind': 'requires'}])
+        self.put('sessions/other.json', {'project': 'p', 'role': 'worker',
+            'session_id': 'other-worker', 'working_directory': str(self.project_dir)})
+        self.assertTrue(self.validate(result)['allowed'])
+        (self.root / f'tasks/p/{sibling}.json').unlink()
+        (self.root / 'sessions/other.json').unlink()
+        self.assertTrue(self.validate(result)['allowed'])
+
+    def test_own_registration_change_stales_but_check_in_does_not(self):
+        result = self.send()
+        registration = self.read('sessions/p-worker.json')
+        self.put('sessions/p-worker.json', {**registration, 'last_seen_at': 'later', 'status': 'busy'})
+        self.assertTrue(self.validate(result)['allowed'])
+        self.put('sessions/p-worker.json', {**registration, 'agent_id': 'changed-agent'})
+        self.assertFalse(self.validate(result)['allowed'])
+
+    def test_parent_change_and_new_inherited_dependency_stale_existing_receipt(self):
+        result = self.send()
+        self.epic([{'key': 'A', 'projects': ['p'], 'parent_key': 'S'}, {'key': 'S'}])
+        self.assertFalse(self.validate(result)['allowed'])
+        fresh = self.send()
+        self.assertTrue(fresh['allowed'], fresh)
+        self.epic([{'key': 'A', 'projects': ['p'], 'parent_key': 'S'},
+                   {'key': 'S', 'depends_on': ['B']}, {'key': 'B'}])
+        self.assertFalse(self.validate(fresh)['allowed'])
+
+    def test_changed_ready_transitive_dependency_evidence_stales(self):
+        earlier = self.task(status='done', evidence=['first proof'])
+        direct = self.task(status='done', evidence=['proof'], depends_on=[earlier])
+        self.update_task(depends_on=[direct])
+        result = self.send()
+        self.task(earlier, status='done', evidence=['different proof'])
+        self.assertFalse(self.validate(result)['allowed'])
+
+    def test_loop_content_change_invalidates_receipt(self):
+        result = self.send()
+        self.loop.write_text('Changed protocol')
+        self.assertFalse(self.validate(result)['allowed'])
 
     def test_cli_check_is_audit_only_and_nonzero_for_blocked(self):
         dep = self.task()
@@ -357,6 +418,51 @@ class DispatchGateTests(unittest.TestCase):
         with patch.object(dispatch_gate, 'build_dashboard', changing_graph):
             self.assertFalse(self.send()['allowed'])
         self.assertEqual([], self.inbox())
+
+    def test_unrelated_change_during_graph_read_rechecks_without_false_denial(self):
+        sibling = self.task()
+        original = dispatch_gate.build_dashboard
+        changed = False
+        def changing_graph(*args, **kwargs):
+            nonlocal changed
+            result = original(*args, **kwargs)
+            if not changed:
+                changed = True
+                self.task(sibling, status='in_progress', evidence=['other progress'])
+            return result
+        with patch.object(dispatch_gate, 'build_dashboard', changing_graph):
+            result = self.send()
+        self.assertTrue(changed)
+        self.assertTrue(result['allowed'], result)
+        self.assertTrue(self.validate(result)['allowed'])
+
+    def test_unrelated_change_after_receipt_does_not_prevent_publication(self):
+        sibling = self.task()
+        original = dispatch_gate._publish
+        def changing_publish(root, path, value):
+            original(root, path, value)
+            if value.get('operation') == 'dispatch' and value.get('allowed'):
+                self.task(sibling, status='in_progress', evidence=['other progress'])
+        with patch.object(dispatch_gate, '_publish', changing_publish):
+            result = self.send()
+        self.assertTrue(result['allowed'], result)
+        self.assertTrue(self.validate(result)['allowed'])
+
+    def test_prerequisite_issue_supporting_task_change_stales_even_when_ready(self):
+        supporting = self.task(issue_key='B', status='done', evidence=['first proof'])
+        self.epic([{'key': 'A', 'depends_on': ['B']},
+                   {'key': 'B', 'local_status': 'verified_done', 'verification': 'passed',
+                    'evidence': ['issue proof']}])
+        result = self.send()
+        self.assertTrue(result['allowed'], result)
+        self.task(supporting, issue_key='B', status='done', evidence=['replacement proof'])
+        self.assertFalse(self.validate(result)['allowed'])
+
+    def test_old_global_receipt_version_requires_fresh_dispatch(self):
+        result = self.send()
+        message = self.read(result['message_path'])
+        self.put(result['message_path'], {**message, 'schema_version': 1})
+        self.assertFalse(self.validate(result)['allowed'])
 
     def test_source_change_after_receipt_prevents_executable_publication(self):
         original = dispatch_gate._publish
