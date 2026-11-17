@@ -1,0 +1,10 @@
+{
+  "id": "REPLACE_WITH_UUID",
+  "in_reply_to": "REPLACE_WITH_MESSAGE_ID",
+  "from_project": "admin-center",
+  "to_project": "identity-service",
+  "status": "done",
+  "body": "Replace with the result.",
+  "evidence": [],
+  "created_at": "REPLACE_WITH_UTC_TIMESTAMP"
+}

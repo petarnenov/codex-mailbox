@@ -1,0 +1,10 @@
+{
+  "id": "REPLACE_WITH_UUID",
+  "from_project": "identity-service",
+  "to_project": "admin-center",
+  "type": "question",
+  "subject": "Replace with a concise subject",
+  "body": "Replace with the request and acceptance criteria.",
+  "created_at": "REPLACE_WITH_UTC_TIMESTAMP",
+  "reply_to": null
+}
