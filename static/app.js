@@ -100,7 +100,7 @@ function renderProcess(s) {
 }
 function appendFreeTextTasks(area,tasks) {
  if(!tasks.length)return;area.append(el('p',`${tasks.length} free-text tasks`,'muted'));
- tasks.forEach(t=>{const card=el('article',undefined,'process-card');card.append(el('strong',taskDisplayTitle(t)),status(t.status),el('p',`${t.project} · Free-text task · ${t.id.slice(0,8)}`));if((t.blockers||[]).length)card.append(el('p','Blockers: '+t.blockers.join('; '),'process-blocker'));area.append(card);});
+ tasks.forEach(t=>{const card=el('article',undefined,'process-card');card.dataset.status=t.status;card.append(el('strong',taskDisplayTitle(t)),status(t.status),el('p',`${t.project} · Free-text task · ${t.id.slice(0,8)}`));if((t.blockers||[]).length)card.append(el('p','Blockers: '+t.blockers.join('; '),'process-blocker'));area.append(card);});
 }
 function renderFreeTextOverview(s) {
  const area=$('free-text-tasks'),tasks=s.tasks.filter(t=>t.mapping_kind==='unmapped');area.replaceChildren();
@@ -413,7 +413,7 @@ function renderTasks(s) {
  if(!s.tasks.length)empty(area,'No local tasks yet','Tasks appear here even before they are mapped to Jira.');
 }
 function taskCard(t) {
-  const card=el('article',undefined,'task');
+  const card=el('article',undefined,'task');card.dataset.status=t.status;
   const mapping=taskAssociation(t);
   card.append(el('p','Local task · '+t.id.slice(0,8),'local-identity'),el('strong',taskDisplayTitle(t)),status(t.status),el('p',`${t.project} · ${(t.teams||[]).join(', ')||'Unassigned'} · ${mapping}`));
   if(t.unresolved_issue_keys.length)card.append(el('p','Unresolved keys: '+t.unresolved_issue_keys.join(', ')));
