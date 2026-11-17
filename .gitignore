@@ -32,3 +32,6 @@ htmlcov/
 
 # Make workflow coverage artifacts
 .coverage-output/
+
+# Workspace instructions and skills are tracked under workspace/
+!/workspace/.claude/

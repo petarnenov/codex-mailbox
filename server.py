@@ -78,6 +78,11 @@ def read_json(root, path, warnings):
         return None
 
 
+def reported_estimate_hours(record):
+    """`codex_estimate_hours` is the original name of the host-neutral `agent_estimate_hours`."""
+    return estimate_range(record.get('agent_estimate_hours')) or estimate_range(record.get('codex_estimate_hours'))
+
+
 def estimate_range(value):
     if isinstance(value, dict) and all(number(value.get(k)) for k in ('low', 'likely', 'high')):
         if value['low'] <= value['likely'] <= value['high']:
@@ -176,7 +181,7 @@ def build_dashboard(root, model=None, mode='live'):
                         project(pid)
                         reported_stats(child, source, pid, epic_key)
         if project_id and (p := project(project_id)):
-            p['reported_estimate'] = estimate_range(data.get('codex_estimate_hours')) or p['reported_estimate']
+            p['reported_estimate'] = reported_estimate_hours(data) or p['reported_estimate']
             actual = data.get('actual_machine_hours')
             if number(actual):
                 p['reported_actual_machine_hours'] = actual
@@ -305,7 +310,7 @@ def build_dashboard(root, model=None, mode='live'):
                       'evidence': evidence_refs(item),
                       'source_status': str(source_status), 'verified': verified,
                       'dependencies': strings(item.get('depends_on', item.get('dependencies'))), 'task_ids': linked,
-                      'estimate': estimate_range(item.get('codex_estimate_hours')),
+                      'estimate': reported_estimate_hours(item),
                       'actual_machine_hours': item.get('actual_machine_hours') if number(item.get('actual_machine_hours')) else None,
                       'missing_record': item.get('_missing', False), 'conflict': False,
                       'teams': record_teams(item, sorted({team for pid in pids for team in projects[pid]['teams']}))}

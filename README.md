@@ -1,15 +1,15 @@
-# Codex mailbox
+# Harness mailbox
 
-The dashboard is the built-in web interface for the `codex-mailbox` coordination workspace. It displays local project, Epic, issue and task snapshots at **http://localhost:17171**. Python standard-library backend, buildless HTML/CSS/JavaScript frontend, one Docker container. No runtime package dependencies and no Jira connection or writes.
+The dashboard is the built-in web interface for the `harness-mailbox` coordination workspace. It displays local project, Epic, issue and task snapshots at **http://localhost:17171**. Python standard-library backend, buildless HTML/CSS/JavaScript frontend, one Docker container. No runtime package dependencies and no Jira connection or writes.
 
 ## Part of the mailbox workspace
 
-The dashboard is a component of **codex-mailbox**, not a separately managed project. Do not add it to `projects.json` or create a project/session registration for it. The registry lists the projects whose work the mailbox coordinates; the dashboard displays their records.
+The dashboard is a component of **harness-mailbox**, not a separately managed project. Do not add it to `projects.json` or create a project/session registration for it. The registry lists the projects whose work the mailbox coordinates; the dashboard displays their records.
 
 In an existing mailbox workspace, keep the dashboard code under `dashboard/`:
 
 ```text
-codex-mailbox/
+harness-mailbox/
 ├── README.md
 ├── projects.json
 ├── projects/
@@ -50,7 +50,7 @@ System installation may request administrator authentication. Docker Desktop may
 From an existing mailbox workspace, install the component if `dashboard/` is absent:
 
 ```sh
-git clone https://github.com/petarnenov/codex-mailbox.git dashboard
+git clone https://github.com/petarnenov/harness-mailbox.git dashboard
 cd dashboard
 make setup
 make doctor
@@ -110,7 +110,7 @@ The sticky header contains five page tabs: **Overview**, **Dependencies**, **Tas
 
 ## Agent compatibility
 
-The dashboard is independent of the agent host. Claude Code, Codex, or another local tool can produce the same JSON snapshots using the contract below; the application only reads files. Codex-specific session discovery, messaging and orchestration adapters are not bundled with this repository. The displayed Codex effort model is a planning convention, not a connection to an agent or billing API.
+The dashboard is independent of the agent host. Codex, Claude Code, GitHub Copilot or another local tool can produce the same JSON snapshots using the contract below; the application only reads files. Host-specific session discovery and messaging are not bundled with this repository; the workspace skills describe them per host. The displayed agent effort model is a planning convention, not a connection to an agent or billing API.
 
 ## Snapshot contract
 
@@ -122,7 +122,7 @@ The backend reads only these JSON paths, with a 4 MB per-file bound. Paths outsi
 {"projects":[{"id":"backend","name":"Backend"}]}
 ```
 
-`projects/<id>.json`: project metadata plus optional `statistics`, `metrics`, `progress`, `totals`, `counts`, `codex_estimate_hours` (`low`, `likely`, `high`) and `actual_machine_hours`. Aggregate stats are displayed as **reported**, never substituted for evidence-based issue metrics. `generated_at` or `updated_at` supplies provenance time.
+`projects/<id>.json`: project metadata plus optional `statistics`, `metrics`, `progress`, `totals`, `counts`, `agent_estimate_hours` (`low`, `likely`, `high`; `codex_estimate_hours` is accepted as its original name) and `actual_machine_hours`. Aggregate stats are displayed as **reported**, never substituted for evidence-based issue metrics. `generated_at` or `updated_at` supplies provenance time.
 
 `epics/<key>/scope.json`:
 
@@ -145,7 +145,7 @@ The backend reads only these JSON paths, with a 4 MB per-file bound. Paths outsi
   "source_status":"In Progress", "local_status":"in_progress",
   "task_ids":["task-uuid"], "depends_on":["OUTSIDE-1"],
   "verification":{"outcome":"passed"}, "evidence":["local/artifact/path"],
-  "codex_estimate_hours":{"low":1,"likely":2,"high":4},
+  "agent_estimate_hours":{"low":1,"likely":2,"high":4},
   "actual_machine_hours":1.3
 }
 ```
@@ -211,9 +211,9 @@ Writer contract: set `epic_key` to the Epic; use `issue_key` or `issue_keys` onl
 
 A completed analysis/design/setup task proves only its stated scope. Update issue `local_status`, criterion evidence and verification only after the orchestrator assesses the work; task completion alone never promotes an issue to Verified done. Source warnings expose missing referenced tasks and unknown keys, while issue rows explicitly show zero task links. Refresh reads these current local records; it does not fetch Jira or accept verification.
 
-### Codex estimates
+### Agent estimates
 
-The editable model uses **low / likely / high hours per issue × review multiplier** (defaults 0.5 / 1.5 / 4 × 1.25). These are illustrative assumptions, not benchmark measurements or calibrated forecasts. Explicit `codex_estimate_hours` override the model for an issue. Shared issue estimates are allocated equally across affected projects; unmapped issues remain in the overall total. Low/likely/high are scenario bounds, not statistical confidence intervals.
+The editable model uses **low / likely / high hours per issue × review multiplier** (defaults 0.5 / 1.5 / 4 × 1.25). These are illustrative assumptions, not benchmark measurements or calibrated forecasts. Explicit `agent_estimate_hours` (or its original name `codex_estimate_hours`) override the model for an issue. Shared issue estimates are allocated equally across affected projects; unmapped issues remain in the overall total. Low/likely/high are scenario bounds, not statistical confidence intervals.
 
 Only known enumerated scope is modeled. Incomplete scope is labeled a known subset; task-only and aggregate-only projects have no inferred whole-project estimate. Explicit reported project estimates are displayed separately and are not added to issue estimates. The hypothetical issue-count calculator works before scope import and is clearly excluded from live statistics. Remaining estimates omit verified issues. Blocked/in-progress issues retain full modeled effort; there is no invented fractional completion.
 

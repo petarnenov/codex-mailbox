@@ -14,7 +14,7 @@ import uuid
 
 from server import build_dashboard
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_BYTES = 4_000_000
 _LOADED_CODE = {name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
                 for name in ('dispatch_gate.py', 'server.py', 'dependency_graph.py', 'delivery_process.py')}
@@ -195,7 +195,65 @@ def _raw_dependencies(root):
                         raise ValueError('Malformed ' + field + ' declaration: ' + str(path.relative_to(root)))
 
 
-def _eligible(root, task_path):
+def _dependency_fingerprint(root, task, project, dashboard, context, prerequisites, snapshot):
+    """Bind the task's incoming dependency closure, not unrelated mailbox activity.
+
+    The whole graph is still rebuilt on validation, so newly added incoming edges,
+    parent changes and prerequisite removals cannot disappear from this binding.
+    Ancestor completion is not required; sibling task progress must not affect it.
+    """
+    nodes = []
+    for node in dashboard['graph']['nodes']:
+        if node['id'] not in context:
+            continue
+        fields = ('id', 'kind', 'unresolved')
+        if node['id'] in prerequisites:
+            fields += ('ready', 'status', 'evidence')
+        nodes.append({key: node.get(key) for key in fields})
+    edges = [edge for edge in dashboard['graph']['edges']
+             if edge['to'] in context]
+    records = {}
+    supporting_tasks = {task_id for issue in dashboard['issues']
+                        if 'issue:' + issue['key'] in prerequisites
+                        for task_id in issue['task_ids']}
+    for path in root.glob('tasks/*/*.json'):
+        data = _read(root, path)
+        if isinstance(data, dict) and ('task:' + str(data.get('id')) in context
+                                      or data.get('id') in supporting_tasks):
+            records[str(path.relative_to(root))] = data
+    for path in root.glob('epics/*/scope.json'):
+        data = _read(root, path)
+        key = data.get('epic_key', data.get('key', path.parent.name))
+        if 'epic:' + key in context:
+            records[str(path.relative_to(root))] = {
+                k: data[k] for k in ('acceptance_criteria', 'user_overrides',
+                                    'delivery_scope', 'execution_scope_pending') if k in data}
+    for path in root.glob('epics/*/issues.json'):
+        data = _read(root, path)
+        data = data.get('issues', data) if isinstance(data, dict) else data
+        data = list(data.values()) if isinstance(data, dict) else data
+        selected = []
+        for issue in data if isinstance(data, list) else []:
+            if not isinstance(issue, dict):
+                continue
+            key = 'issue:' + str(issue.get('key', issue.get('issue_key')))
+            if key in context:
+                # Sibling membership/progress does not authorize this task. The
+                # graph above still binds membership of relevant tasks and the
+                # computed readiness of an issue that IS a prerequisite.
+                selected.append({k: v for k, v in issue.items()
+                                 if k not in ('task_ids', 'local_task_ids', 'updated_at')})
+        if selected:
+            records[str(path.relative_to(root))] = selected
+    return _hash(dict(version=SCHEMA_VERSION, task=task, project=project,
+                      nodes=sorted(nodes, key=lambda n: n['id']),
+                      edges=sorted(edges, key=lambda e: (e['from'], e['to'], e['kind'])),
+                      records=records,
+                      loop_sha256=hashlib.sha256(Path(task['required_loop_path']).read_bytes()).hexdigest(),
+                      code={k: v for k, v in snapshot.items() if k.startswith('@code/')}))
+
+
+def _eligible(root, task_path, stabilize=True):
     result = _base('check', root)
     before, fingerprint = _snapshot(root)
     task, relative, project = _target(root, task_path)
@@ -253,6 +311,7 @@ def _eligible(root, task_path):
 
     target_ancestors = ancestors(target)
     visited, visiting, prerequisites = set(), set(), set()
+    context = set(target_ancestors)
 
     def walk(key):
         if key in visiting:
@@ -262,6 +321,7 @@ def _eligible(root, task_path):
             return
         visiting.add(key)
         inherited = ancestors(key)
+        context.update(inherited)
         for owner in sorted(inherited):
             for prerequisite in sorted(requires.get(owner, ())):
                 prerequisites.add(prerequisite)
@@ -276,9 +336,17 @@ def _eligible(root, task_path):
     if target in nodes:
         walk(target)
     result['prerequisites'] = sorted(prerequisites)
+    if not reasons:
+        result['fingerprint'] = _dependency_fingerprint(
+            root, task, project, dashboard, context, prerequisites, before)
     after, current = _snapshot(root)
     if before != after or current != fingerprint:
-        reasons.append('Authoritative input changed during eligibility evaluation')
+        # A different worker can publish while the graph is read. Rebuild once
+        # from stable inputs; accept only the same relevant closure, never a
+        # changed authorization. Sustained churn still fails closed.
+        fresh = _eligible(root, task_path, stabilize=False) if stabilize and not reasons else None
+        if not fresh or not fresh['allowed'] or fresh['fingerprint'] != result['fingerprint']:
+            reasons.append('Authoritative input changed during eligibility evaluation')
     result['reasons'] = list(dict.fromkeys(reasons))
     result['allowed'] = not result['reasons']
     return result
@@ -348,9 +416,12 @@ def _worker(root, endpoint, project):
             cwd = data.get('working_directory', data.get('startup_working_directory'))
             expected = (project_record.get('working_directory'), project_record.get('repository_path'))
             if cwd in expected and isinstance(cwd, str):
-                registrations.append(path)
+                registrations.append({key: data.get(key) for key in
+                    ('role', 'project', 'session_id', 'agent_id',
+                     'working_directory', 'startup_working_directory')})
     if not registrations:
         raise ValueError('Worker endpoint is not self-registered for this exact project/directory')
+    return _hash(sorted(registrations, key=lambda value: _canonical(value)))
 
 
 def _paths_with_message(root, message_id):
@@ -392,7 +463,8 @@ def _validate(root, message_path, endpoint):
         result['reasons'].append('Execution envelope content hash mismatch')
     if receipt.get('fingerprint') != decision.get('fingerprint'):
         result['reasons'].append('Dispatch receipt is stale: authoritative input fingerprint changed')
-    _worker(root, endpoint, decision.get('project'))
+    if receipt.get('worker_fingerprint') != _worker(root, endpoint, decision.get('project')):
+        result['reasons'].append('Dispatch receipt is stale: worker registration changed')
     if _paths_with_message(root, path.stem) != [path]:
         result['reasons'].append('Message UUID location changed during validation or is archived/duplicated')
     result['allowed'] = not result['reasons']
@@ -425,7 +497,7 @@ def dispatch(root, task_path, endpoint, message_id=None):
             raise ValueError('Message ID must be a canonical UUID')
         if not result['allowed']:
             return _audit(root, result)
-        _worker(root, endpoint, result['project'])
+        result['worker_fingerprint'] = _worker(root, endpoint, result['project'])
         directory = _mkdir(root, Path('dispatch-gates') / result['task_id'])
         lock = directory / '.dispatch.lock'
         try:
@@ -457,12 +529,15 @@ def dispatch(root, task_path, endpoint, message_id=None):
                        task_path=result['task_path'], intended_endpoint=endpoint, receipt_path=receipt_path,
                        body='Validate this exact dispatch envelope before claiming or executing work. Read the bound task and actual project loop. Dependency eligibility does not replace user scope, integration synchronization, task ownership, G1/G2, quota or reachability requirements. Jira remains read-only. No execution is authorized by a missing, failed or stale receipt.')
         result.update(message_path=message_path, message_hash=_hash(message))
-        if _snapshot(root)[1] != result['fingerprint']:
+        current = evaluate(root, task_path)
+        if not current['allowed'] or current['fingerprint'] != result['fingerprint']:
             raise ValueError('Authoritative input changed before receipt publication')
         receipt = _audit(root, result, receipt_id)
-        if _snapshot(root)[1] != result['fingerprint']:
+        current = evaluate(root, task_path)
+        if not current['allowed'] or current['fingerprint'] != result['fingerprint']:
             raise ValueError('Authoritative input changed before inbox publication; receipt alone cannot execute')
-        _worker(root, endpoint, result['project'])
+        if _worker(root, endpoint, result['project']) != result['worker_fingerprint']:
+            raise ValueError('Worker registration changed before inbox publication')
         _publish(root, message_path, message)
         return receipt
     except (ValueError, OSError, TypeError, KeyError, StopIteration, RecursionError) as exc:

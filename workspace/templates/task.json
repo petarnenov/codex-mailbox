@@ -1,0 +1,16 @@
+{
+  "id": "REPLACE_WITH_UUID",
+  "project": "admin-center",
+  "title": "Replace with task title",
+  "description": "",
+  "acceptance_criteria": [],
+  "status": "pending",
+  "owner_session_id": null,
+  "depends_on": [],
+  "required_loop_skill": "REPLACE_WITH_PROJECT_LOOP_SKILL",
+  "required_loop_path": "REPLACE_WITH_ABSOLUTE_SKILL_PATH",
+  "allowed_paths": [],
+  "evidence": [],
+  "blockers": [],
+  "updated_at": "REPLACE_WITH_UTC_TIMESTAMP"
+}

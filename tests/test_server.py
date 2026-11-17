@@ -104,6 +104,15 @@ class DashboardBuildTests(Fixture):
         self.assertIsNone(issue['actual_machine_hours'])
         self.assertIsNone(data['totals']['actual_machine_hours'])
 
+    def test_agent_estimate_hours_is_read_and_preferred_over_the_original_codex_field(self):
+        self.epic('E', ['A-1', 'A-2'], True, [
+            {'key': 'A-1', 'agent_estimate_hours': {'low': 3, 'likely': 4, 'high': 5}},
+            {'key': 'A-2', 'agent_estimate_hours': {'low': 1, 'likely': 2, 'high': 3},
+             'codex_estimate_hours': {'low': 7, 'likely': 8, 'high': 9}}])
+        data = server.build_dashboard(self.root, MODEL)
+        self.assertEqual({'low': 4.0, 'likely': 6.0, 'high': 8.0}, data['totals']['estimate'])
+        self.assertEqual(2, data['totals']['explicit_estimates'])
+
     def test_model_estimates_explicit_override_actual_null_and_partial_actuals(self):
         self.epic('E', ['A-1', 'A-2'], True, [
             {'key': 'A-1', 'codex_estimate_hours': {'low': 3, 'likely': 4, 'high': 5}, 'actual_machine_hours': 2.5},
