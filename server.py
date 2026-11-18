@@ -13,7 +13,7 @@ from dependency_graph import build_graph
 from delivery_process import STAGES, project_delivery
 
 ROOT = Path(__file__).parent
-STATUSES = ('pending', 'in_progress', 'blocked', 'awaiting_verification', 'verified_done')
+STATUSES = ('pending', 'in_progress', 'blocked', 'awaiting_verification', 'verified_done', 'deferred')
 
 
 def number(value):

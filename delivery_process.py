@@ -3,7 +3,7 @@ from html.parser import HTMLParser
 from datetime import datetime
 import json
 
-STAGES = {'uninvestigated', 'investigating', 'ready', 'implementation', 'review', 'verification', 'complete', 'unknown'}
+STAGES = {'uninvestigated', 'investigating', 'ready', 'implementation', 'review', 'verification', 'complete', 'deferred', 'unknown'}
 TRACE_STEPS = ('written', 'reviewed', 'integrated', 'tested_integrated')
 
 
@@ -249,6 +249,8 @@ def _dependency_blockers(graph, targets):
 def _stage(issue, records, tasks, conflict):
     if issue['verified']:
         return 'complete', 'Normalized local acceptance verification and required task evidence passed.'
+    if issue['local_status'] == 'deferred':
+        return 'deferred', 'Deferred by a recorded decision; the issue stays in scope but is not scheduled.'
     if conflict or issue['conflict'] or issue['missing_record']:
         return 'unknown', 'Missing or conflicting process evidence requires reconciliation.'
     explicit = _first(records, 'stage')
@@ -350,6 +352,7 @@ def project_delivery(issues, tasks, raw_issues, graph, warnings):
                 'review': 'Complete independent review and record its findings and evidence.',
                 'verification': 'Verify acceptance criteria against the exact integrated revision and record evidence.',
                 'complete': 'No further delivery action is recorded after local acceptance verification.',
+                'deferred': 'No delivery action until the recorded deferral is lifted.',
                 'unknown': 'Record or reconcile investigation, process stage and remaining work before planning execution.'}[stage]
         criteria = [] if conflicts else _criteria(_first(records, 'criteria'))
         trace = _trace(None if conflicts else _first(records, 'trace'))

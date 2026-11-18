@@ -6,8 +6,8 @@ let focusId = '';
 let comparison = null;
 let detailReturnFocus = null;
 let urlStateErrors = [];
-const processStages={uninvestigated:'Uninvestigated',investigating:'Investigating',ready:'Ready for gated execution',implementation:'Implementation',review:'Review',verification:'Verification',complete:'Verified complete',unknown:'Stage unknown'};
-const labels = {pending:'Pending',in_progress:'In progress',blocked:'Blocked',awaiting_verification:'Awaiting verification',verified_done:'Verified done',done:'Done'};
+const processStages={uninvestigated:'Uninvestigated',investigating:'Investigating',ready:'Ready for gated execution',implementation:'Implementation',review:'Review',verification:'Verification',complete:'Verified complete',deferred:'Deferred',unknown:'Stage unknown'};
+const labels = {pending:'Pending',in_progress:'In progress',blocked:'Blocked',awaiting_verification:'Awaiting verification',verified_done:'Verified done',deferred:'Deferred',done:'Done'};
 function el(tag, text, cls) { const n=document.createElement(tag); if(text!==undefined)n.textContent=text; if(cls)n.className=cls; return n; }
 function moneyless(n) { return n===null || n===undefined ? 'Unavailable' : Number(n).toLocaleString(undefined,{maximumFractionDigits:2}); }
 function range(r) { return r ? `${moneyless(r.low)} / ${moneyless(r.likely)} / ${moneyless(r.high)} h` : 'Unavailable'; }
@@ -52,7 +52,7 @@ function getDelivery(issue) {
 }
 function stageMarker(issue) {
  const delivery=getDelivery(issue),stage=delivery.stage;
- const kind=stage==='complete'&&issue.verified?'complete':['implementation','investigating'].includes(stage)?'progress':['review','verification','ready'].includes(stage)?'waiting':'unknown';
+ const kind=stage==='complete'&&issue.verified?'complete':['implementation','investigating'].includes(stage)?'progress':['review','verification','ready'].includes(stage)?'waiting':stage==='deferred'?'deferred':'unknown';
  return {label:stage==='complete'&&!issue.verified?'Stage unknown':processStages[stage],kind};
 }
 function issueButton(issue,label) {const button=el('button',label||issue.key+' · '+issue.title,'issue-button');button.type='button';button.dataset.issueKey=issue.key;button.addEventListener('click',()=>openIssue(issue.key));return button;}
@@ -85,7 +85,7 @@ function ownershipRoles(issue,full=false) {
  return area;
 }
 function compactIssueCards(area,issues,makeCard) {
- const order={implementation:0,review:1,verification:2,investigating:3,ready:4,uninvestigated:5,unknown:6,complete:7};
+ const order={implementation:0,review:1,verification:2,investigating:3,ready:4,uninvestigated:5,unknown:6,deferred:7,complete:8};
  const sorted=[...issues].sort((a,b)=>(order[getDelivery(a).stage]-order[getDelivery(b).stage])||a.key.localeCompare(b.key));
  area.append(el('p',`${sorted.length} recorded issues`,'muted'));const remaining=el('details',undefined,'remaining-work');
  if(sorted.length>5)remaining.append(el('summary',`Show remaining ${sorted.length-5}`));
@@ -93,7 +93,7 @@ function compactIssueCards(area,issues,makeCard) {
 }
 function renderProcess(s) {
  const strip=$('process-strip');strip.replaceChildren();Object.entries(processStages).forEach(([stage,label])=>{const issueCount=s.issues.filter(i=>getDelivery(i).stage===stage).length,taskCount=s.tasks.filter(t=>t.mapping_kind==='unmapped'&&t.delivery_stage===stage).length,box=el('div',undefined,'process-stage');box.dataset.stage=stage;box.append(el('strong',String(issueCount+taskCount)),el('span',label));if(taskCount)box.append(el('small',`${issueCount} issues · ${taskCount} free-text tasks`));strip.append(box);});
- const groups={now:[],blocked:[],next:[]};s.issues.forEach(issue=>{const d=getDelivery(issue);if(d.blocked)groups.blocked.push(issue);else if(['investigating','implementation','review','verification'].includes(d.stage))groups.now.push(issue);else if(d.stage!=='complete')groups.next.push(issue);});
+ const groups={now:[],blocked:[],next:[]};s.issues.forEach(issue=>{const d=getDelivery(issue);if(d.blocked)groups.blocked.push(issue);else if(['investigating','implementation','review','verification'].includes(d.stage))groups.now.push(issue);else if(!['complete','deferred'].includes(d.stage))groups.next.push(issue);});
  Object.entries(groups).forEach(([group,issues])=>{const area=$('process-'+group);area.replaceChildren();compactIssueCards(area,issues,issue=>{const d=getDelivery(issue),marker=stageMarker(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),el('span',marker.label,'graph-status marker-'+marker.kind),ownershipRoles(issue),el('p',d.next_action));if(d.blocked)card.append(el('span','! Blocked','graph-status marker-blocked'),el('p','Blockers: '+(d.blockers.join('; ')||'Blocked; reason not recorded'),'process-blocker'));card.append(el('small','Recorded suggestion · dependency gate required'));return card;});const freeText=s.tasks.filter(t=>isOpenFreeTextTask(t)&&freeTextProcessGroup(t)===group);appendFreeTextTasks(area,freeText);if(!issues.length&&!freeText.length)area.append(el('p','No matching recorded work.','muted'));});
  renderFreeTextOverview(s);
  const queue=$('verification-queue');queue.replaceChildren();const pending=s.issues.filter(i=>getDelivery(i).stage==='verification'||i.local_status==='awaiting_verification');compactIssueCards(queue,pending,issue=>{const d=getDelivery(issue),card=el('article',undefined,'process-card');card.append(issueButton(issue),ownershipRoles(issue),el('p',criteriaSummary(d)),el('p','Verifier: '+(d.verification.verifier||'Unknown')),el('p',d.verification.reason));return card;});if(!pending.length)queue.append(el('p','No matching issues await recorded verification.','muted'));

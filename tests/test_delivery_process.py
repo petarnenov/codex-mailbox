@@ -52,6 +52,15 @@ class DeliveryProcessTests(Fixture):
         self.assertTrue(issue['verified'])
         self.assertEqual('complete', issue['delivery']['stage'])
 
+    def test_deferred_issue_has_deferred_stage_and_stays_in_scope(self):
+        self.put('tasks/p/T.json', {'id': 'T', 'status': 'pending', 'issue_key': 'A'})
+        data = self.build({'local_status': 'deferred', 'task_ids': ['T']})
+        issue = next(i for i in data['issues'] if i['key'] == 'A')
+        self.assertEqual('deferred', issue['local_status'])
+        self.assertEqual('deferred', issue['delivery']['stage'])
+        self.assertFalse(issue['verified'])
+        self.assertEqual(1, data['totals']['known_issues'])
+
     def test_execution_evidence_selects_stage_without_accepting_issue(self):
         for status, evidence, stage in (('in_progress', [], 'implementation'), ('done', ['task-proof'], 'verification')):
             with self.subTest(status=status):
