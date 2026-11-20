@@ -324,6 +324,8 @@ def project_delivery(issues, tasks, raw_issues, graph, warnings):
             if task['status'] == 'blocked':
                 blockers.add('Local task ' + task['id'] + ' is blocked.')
         blockers.update(_dependency_blockers(graph, ['issue:' + issue['key']] + ['task:' + task['id'] for task in linked]))
+        # A task shared with a dependent issue must not list this issue as its own prerequisite.
+        blockers.discard('Unmet prerequisite: issue:' + issue['key'])
         blockers.discard('')
         stage, reason = _stage(issue, records, linked, conflicts)
         raw_verification = _first(records, 'verification', {})

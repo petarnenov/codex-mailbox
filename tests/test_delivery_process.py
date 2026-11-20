@@ -87,6 +87,12 @@ class DeliveryProcessTests(Fixture):
         self.assertIn('milestone:release', ' '.join(d['blockers']))
         self.assertEqual('ready', d['stage'])
 
+    def test_shared_task_does_not_make_an_issue_its_own_prerequisite(self):
+        self.put('tasks/p/t.json', {'id': 't', 'project': 'p', 'status': 'in_progress'})
+        d = self.issue({'task_ids': ['t']},
+                       [{'key': 'C', 'task_ids': ['t'], 'depends_on': ['A'], 'projects': ['p']}])['delivery']
+        self.assertNotIn('Unmet prerequisite: issue:A', d['blockers'])
+
     def test_criterion_pass_requires_own_nonblank_evidence(self):
         d = self.issue({'delivery': {'criteria': [
             {'text': 'First', 'status': 'passed', 'evidence': []},

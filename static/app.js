@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 let data;
 let request = 0;
 let focusId = '';
+let focusSubtree = false;
 let comparison = null;
 let detailReturnFocus = null;
 let urlStateErrors = [];
@@ -23,19 +24,23 @@ function sumMetrics(items,complete) {
 const openTaskStatuses=['pending','in_progress','blocked'];
 function isOpenFreeTextTask(record) {return record.mapping_kind==='unmapped'&&openTaskStatuses.includes(record.status);}
 function freeTextProcessGroup(task) {return task.status==='blocked'||(task.blockers||[]).length?'blocked':task.status==='in_progress'?'now':'next';}
+const settledCompletionMinutes=5;
+function hasDependents(taskId) {const id='task:'+taskId;return (data.graph?.edges||[]).some(e=>e.kind==='requires'&&e.from===id);}
+function completedLongerThan(task,minutes,now=Date.now()) {const at=Date.parse(task.updated_at||'');return !Number.isFinite(at)||now-at>minutes*60000;}
+function isSettledCompletedTask(task) {return task.evidenced===true&&!hasDependents(task.id)&&completedLongerThan(task,settledCompletionMinutes);}
 function matchesTeam(record,team) { const teams=record.teams||[];return !team||(team==='unassigned'?teams.length===0:teams.includes(team)); }
 function selection() {
- const p=$('project').value,e=$('epic').value,team=$('team').value,q=$('search').value.trim().toLowerCase();
+ const p=$('project').value,e=$('epic').value,team=$('team').value,q=$('search').value.trim().toLowerCase(),hideCompleted=$('hide-completed').checked;
  const taskId=e.startsWith('task:')?e.slice(5):'',epic=taskId?'':e;
  const invalid=[...urlStateErrors];if(p&&!data.projects.some(x=>x.id===p))invalid.push('Project: '+p);if(epic&&!data.epics.some(x=>x.key===epic))invalid.push('Epic: '+epic);if(taskId&&!data.tasks.some(t=>t.id===taskId))invalid.push('Task: '+taskId);if(!['','BE','FE','QA','unassigned'].includes(team))invalid.push('Team: '+team);
  const found=i=>!q||(i.key+' '+i.title).toLowerCase().includes(q);
  const issues=invalid.length?[]:data.issues.filter(i=>(!p||i.projects.includes(p))&&(!epic||i.epic_keys.includes(epic))&&(!taskId||i.task_ids.includes(taskId))&&matchesTeam(i,team)&&found(i));
- const tasks=invalid.length?[]:data.tasks.filter(t=>(!p||t.project===p)&&(!epic||(t.epic_keys||[t.epic_key]).includes(epic))&&(!taskId||t.id===taskId)&&matchesTeam(t,team)&&(!q||(t.id+' '+t.title+' '+(t.issue_keys||[]).join(' ')+' '+(t.epic_keys||[]).join(' ')).toLowerCase().includes(q)||issues.some(i=>i.task_ids.includes(t.id))));
+ const tasks=invalid.length?[]:data.tasks.filter(t=>(!p||t.project===p)&&(!epic||(t.epic_keys||[t.epic_key]).includes(epic))&&(!taskId||t.id===taskId)&&matchesTeam(t,team)&&(!q||(t.id+' '+t.title+' '+(t.issue_keys||[]).join(' ')+' '+(t.epic_keys||[]).join(' ')).toLowerCase().includes(q)||issues.some(i=>i.task_ids.includes(t.id)))&&!(hideCompleted&&isSettledCompletedTask(t)));
  const reported=invalid.length||q||taskId?[]:data.reported_statistics.filter(r=>(!p||!r.project||r.project===p)&&(!epic||!r.epic||r.epic===epic)&&(!team||((r.teams||[]).length>0&&matchesTeam(r,team))));
  const epics=invalid.length?[]:data.epics.filter(x=>(!epic||x.key===epic)&&(!(p||team||q||taskId)||issues.some(i=>i.epic_keys.includes(x.key))||tasks.some(t=>(t.epic_keys||[t.epic_key]).includes(x.key))||reported.some(r=>r.epic===x.key&&(!p||r.project===p))));
  const projects=invalid.length?[]:data.projects.filter(x=>(!p||x.id===p)&&(!team||matchesTeam(x,team)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id))&&(!(e||q)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id&&r.epic===epic)));
  const complete=!invalid.length&&!taskId&&(epic?data.epics.some(x=>x.key===epic)&&data.epics.filter(x=>x.key===epic).every(x=>x.scope_complete):data.totals.scope_complete);
- return {p,e:epic,taskId,team,q,invalid,issues,tasks,epics,projects,reported,totals:sumMetrics(issues,complete)};
+ return {p,e:epic,taskId,team,q,hideCompleted,invalid,issues,tasks,epics,projects,reported,totals:sumMetrics(issues,complete)};
 }
 function taskShortLabel(task) {const words=String(task.short_title||task.title||task.id).trim().split(/\s+/);return words.length>4?words.slice(0,4).join(' ')+'…':words.join(' ');}
 function populateWorkFilter() {
@@ -152,7 +157,7 @@ function renderIssueDetail(key) {
  const workGrid=el('div',undefined,'detail-work-grid');body.append(workGrid);const existing=addDetailSection(workGrid,'Existing work',d.existing_work),remaining=addDetailSection(workGrid,'Remaining work',d.remainder);existing.classList.add('detail-existing');remaining.classList.add('detail-remaining');
  const dependencies=addDetailSection(body,'Prerequisites & dependents');const id='issue:'+issue.key,links=(data.graph?.edges||[]).filter(e=>e.kind==='requires'&&(e.from===id||e.to===id));
  links.forEach(edge=>{const other=(data.graph.nodes||[]).find(n=>n.id===(edge.to===id?edge.from:edge.to)),line=edge.to===id?'Prerequisite: ':'Dependent: ';dependencies.append(el('p',line+(other?graphRecordLabel(other):edge.to===id?edge.from:edge.to)+' · '+(edge.condition||'Recorded dependency')));addEvidence(dependencies,edge.evidence);});if(!links.length)dependencies.append(el('p','No direct prerequisite or dependent is recorded; this does not establish execution eligibility.'));
- const focus=el('button','Focus this issue in dependency map');focus.type='button';focus.id='focus-issue';focus.addEventListener('click',()=>{focusId=id;closeIssue();$('graph-execution').setAttribute('aria-pressed','true');$('graph-hierarchy').setAttribute('aria-pressed','false');writeUrl('dependencies');selectView();render();});dependencies.append(focus);
+ const focus=el('button','Focus this issue in dependency map');focus.type='button';focus.id='focus-issue';focus.addEventListener('click',()=>{focusId=id;focusSubtree=false;closeIssue();$('graph-execution').setAttribute('aria-pressed','true');$('graph-hierarchy').setAttribute('aria-pressed','false');writeUrl('dependencies');selectView();render();});dependencies.append(focus);
  const work=addDetailSection(body,'Linked local work');const tasks=data.tasks.filter(t=>(issue.task_ids||[]).includes(t.id));tasks.forEach(t=>{const row=el('article',undefined,'criterion');row.append(el('strong',`Local task · ${t.id}`),el('p',taskDisplayTitle(t)+' · '+(labels[t.status]||t.status)+' · '+(t.evidenced?'completion evidence recorded':'completion evidence unconfirmed')),el('p',taskAssociation(t)),el('p','Source: '+(t.source||'Unknown')));const evidence=Array.isArray(t.evidence)?t.evidence:(data.graph?.nodes||[]).find(n=>n.id==='task:'+t.id)?.evidence||[];addEvidence(row,evidence);if(!evidence.length)row.append(el('p','Evidence references unavailable.'));work.append(row);});if(!tasks.length)work.append(el('p','No linked local tasks recorded.'));
  const acceptance=addDetailSection(body,'Acceptance criteria');
  acceptance.append(el('span','DEFINITION OF DONE','detail-eyebrow'));
@@ -188,7 +193,7 @@ function renderIssueDetail(key) {
 }
 function openIssue(key) {$('issue-detail').dataset.issueKey=key;detailReturnFocus=document.activeElement;renderIssueDetail(key);if(!$('issue-detail').open)$('issue-detail').showModal();$('close-detail').focus();}
 function closeIssue() {$('issue-detail').close();if(detailReturnFocus?.isConnected)detailReturnFocus.focus();}
-function comparisonKey(s) {return 'mailbox-process-v1:'+JSON.stringify({mode:data.mode,p:s.p,e:s.e,task:s.taskId,team:s.team,q:s.q});}
+function comparisonKey(s) {return 'mailbox-process-v1:'+JSON.stringify({mode:data.mode,p:s.p,e:s.e,task:s.taskId,team:s.team,q:s.q,...(s.hideCompleted?{}:{completed:'all'})});}
 function comparisonMembership(values) {return [...new Set((Array.isArray(values)?values:[]).filter(value=>typeof value==='string'&&value.trim()).map(value=>value.trim()))].sort();}
 function comparisonScopeLabel(scope) {return Object.entries(scope).map(([kind,values])=>kind+': '+(values.join(', ')||'none recorded')).join('; ');}
 function snapshotForComparison(s) {
@@ -204,10 +209,10 @@ function captureComparison(s) {
  const key=comparisonKey(s),current=snapshotForComparison(s);try{const raw=localStorage.getItem(key);if(!raw)comparison={key,message:'First visit to this filtered scope. The current snapshot is saved for the next successful refresh.',changes:[]};else{let previous;try{previous=JSON.parse(raw);}catch(_){previous=null;}comparison=validComparisonSnapshot(previous)?{key,message:'Compared with this scope last viewed at '+previous.read_at,changes:snapshotChanges(previous,current)}:{key,message:'Saved comparison is unavailable or invalid. A new baseline is saved for the next refresh.',changes:[]};}localStorage.setItem(key,JSON.stringify(current));}catch(_){comparison={key,message:'Browser storage unavailable; changes since the last view cannot be persisted.',changes:[]};}
 }
 function renderChanges(s) {const area=$('changes-since-view');area.replaceChildren();if(!comparison||comparison.key!==comparisonKey(s)){area.append(el('p','Refresh data to compare this filtered scope. Switching filters, tabs or focus does not advance its baseline.'));return;}area.append(el('p',comparison.message));comparison.changes.forEach(change=>area.append(el('p',change,'scope-change')));if(!comparison.changes.length&&comparison.message.startsWith('Compared'))area.append(el('p','No issue or local task additions, removals, stage, blocker, verified-completion or scope / association changes.'));}
-function focusGraph(graph,view,id,mode) {
+function focusGraph(graph,view,id,mode,descendantsOnly=false) {
  if(!id)return view;if(!graph.nodes.some(n=>n.id===id))return {nodes:[],edges:[],focusMissing:true};
  const edges=graph.edges.filter(e=>e.kind===(mode==='hierarchy'?'membership':'requires')),visible=new Set([id]);
- for(const direction of ['ancestors','descendants']){const seen=new Set([id]),queue=[id];for(let index=0;index<queue.length;index++){const current=queue[index];edges.forEach(e=>{const next=direction==='ancestors'?(e.to===current?e.from:null):(e.from===current?e.to:null);if(next&&!seen.has(next)){seen.add(next);visible.add(next);queue.push(next);}});}}
+ for(const direction of descendantsOnly?['descendants']:['ancestors','descendants']){const seen=new Set([id]),queue=[id];for(let index=0;index<queue.length;index++){const current=queue[index];edges.forEach(e=>{const next=direction==='ancestors'?(e.to===current?e.from:null):(e.from===current?e.to:null);if(next&&!seen.has(next)){seen.add(next);visible.add(next);queue.push(next);}});}}
  const selected=new Set(view.nodes.filter(n=>!n.boundary).map(n=>n.id));return {nodes:graph.nodes.filter(n=>visible.has(n.id)).map(n=>({...n,boundary:!selected.has(n.id)})),edges:edges.filter(e=>visible.has(e.from)&&visible.has(e.to))};
 }
 function renderMetrics(s) {
@@ -268,8 +273,8 @@ function layoutGraph(nodes,edges) {
  const queue=nodes.filter(n=>incoming.get(n.id)===0).map(n=>n.id);
  for(let i=0;i<queue.length;i++){const id=queue[i];(outgoing.get(id)||[]).forEach(next=>{depth.set(next,Math.max(depth.get(next),depth.get(id)+1));incoming.set(next,incoming.get(next)-1);if(incoming.get(next)===0)queue.push(next);});}
  const rows=new Map(),positions=new Map();
- [...nodes].sort((a,b)=>(a.label||a.id).localeCompare(b.label||b.id)).forEach(n=>{const rank=depth.get(n.id),row=rows.get(rank)||0;positions.set(n.id,{x:20+rank*285,y:48+row*158});rows.set(rank,row+1);});
- return {positions,cycles,width:Math.max(760,(Math.max(0,...depth.values())+1)*285+40),height:Math.max(230,Math.max(0,...rows.values())*158+65)};
+ [...nodes].sort((a,b)=>(a.label||a.id).localeCompare(b.label||b.id)).forEach(n=>{const rank=depth.get(n.id),row=rows.get(rank)||0;positions.set(n.id,{x:20+rank*285,y:48+row*170});rows.set(rank,row+1);});
+ return {positions,cycles,width:Math.max(760,(Math.max(0,...depth.values())+1)*285+40),height:Math.max(230,Math.max(0,...rows.values())*170+65)};
 }
 function graphCompletion(n) {return n.unresolved?'Unresolved record':n.ready?'Verified complete':'Completion unverified';}
 function graphMarker(n,unmet,process=null) {
@@ -310,6 +315,12 @@ function localWorkGroups(graph,s) {
  });
  return groups;
 }
+function membershipDescendants(id) {
+ const seen=new Set(),queue=[id];
+ for(let index=0;index<queue.length;index++)data.graph.edges.forEach(e=>{if(e.kind==='membership'&&e.from===queue[index]&&!seen.has(e.to)&&e.to!==id){seen.add(e.to);queue.push(e.to);}});
+ return seen;
+}
+function showSubtree(id) {focusId=id;focusSubtree=true;$('graph-hierarchy').setAttribute('aria-pressed','true');$('graph-execution').setAttribute('aria-pressed','false');writeUrl();renderMap(selection());}
 function renderLocalWork(groups) {
  [['current','Current local work','Owning Jira work is recorded as active, or the task is an open free-text task without Jira. Expand a local record for its result and evidence.'],['history','Local work history','Only local tasks with verified completion evidence appear here; completion does not imply the owning Jira item is complete.'],['audit','Other local work / audit','Owning Jira activity is unknown or not recorded as active. These records remain inspectable; unverified prerequisites stay on the map.']].forEach(([kind,title,note])=>{
   const area=$('local-work-'+kind);area.replaceChildren();area.append(el('summary',`${title} · ${groups[kind].length}`),el('p',note,'footnote'));
@@ -324,9 +335,9 @@ function renderMap(s) {
  $('graph-legend').textContent=mode==='hierarchy'?'Membership only: project → Epic → parent issue → subtask → linked local work. Membership does not impose execution order.':'Prerequisite → dependent. Markers: green ✓ verified complete · blue ● in progress · orange ! blocked / unmet · gray ○ unverified. Dashed: context / unresolved · coral edges: cycle.';
  if(!data.graph){empty(area,'Relationship data unavailable','Refresh after updating the dashboard projection. No dependencies are inferred from task titles or blockers.');$('graph-summary').textContent='No graph snapshot available.';return;}
  const showLocal=$('graph-local-work').checked,groups=localWorkGroups(data.graph,s);renderLocalWork(groups);
- const baseView=selectGraph(data.graph,s,mode,showLocal),rawView=s.invalid?.length?{nodes:[],edges:[]}:focusGraph(data.graph,baseView,focusId,mode),kept=new Set(rawView.nodes.filter(n=>showLocal||n.kind!=='task'||!n.ready).map(n=>n.id));
+ const baseView=selectGraph(data.graph,s,mode,showLocal),rawView=s.invalid?.length?{nodes:[],edges:[]}:focusGraph(data.graph,baseView,focusId,mode,focusSubtree),kept=new Set(rawView.nodes.filter(n=>showLocal||focusSubtree||n.kind!=='task'||!n.ready).map(n=>n.id));
  const view={nodes:rawView.nodes.filter(n=>kept.has(n.id)),edges:rawView.edges.filter(e=>kept.has(e.from)&&kept.has(e.to))},selected=view.nodes.filter(n=>!n.boundary),boundary=view.nodes.length-selected.length;
- $('focus-summary').textContent=focusId?(rawView.focusMissing?'Focus unavailable: '+focusId:'Focused on '+focusId+' · prerequisites and dependents; outside-filter context does not change totals.'):'No graph focus · showing filtered scope';$('clear-focus').hidden=!focusId;
+ $('focus-summary').textContent=focusId?(rawView.focusMissing?'Focus unavailable: '+focusId:(focusSubtree?'Showing every linked descendant of '+focusId+' (children, their children and local tasks)':'Focused on '+focusId+' · prerequisites and dependents')+'; outside-filter context does not change totals.'):'No graph focus · showing filtered scope';$('clear-focus').hidden=!focusId;
  const connected=new Set(view.edges.flatMap(e=>[e.from,e.to]));
  const drawing=mode==='execution'?view.nodes.filter(n=>connected.has(n.id)||n.id===focusId||isOpenFreeTextTask(n)):view.nodes;
  const freeTextShown=view.nodes.filter(isOpenFreeTextTask).length;
@@ -346,10 +357,10 @@ function renderMap(s) {
   drawing.forEach(n=>{const p=layout.positions.get(n.id),g=svgEl('g',{'data-node-id':n.id,'data-boundary':String(n.boundary)});
    const info=graphIdentity(n),unmet=data.graph.edges.filter(e=>e.kind==='requires'&&e.to===n.id&&!data.graph.nodes.find(x=>x.id===e.from)?.ready).length,issue=n.kind==='issue'?data.issues.find(i=>'issue:'+i.key===n.id):null,marker=graphMarker(n,unmet,issue?stageMarker(issue):null);
    g.append(svgEl('title',{},`${info.identity} — ${info.title} · ${info.kind} · ${info.association} · Full record: ${n.label}${n.detail?' — '+n.detail:''} · ${n.id} · ${graphCompletion(n)}${n.boundary?' · outside selection context':''}`));
-   g.append(svgEl('rect',{x:p.x,y:p.y,width:245,height:136,rx:7,stroke:n.ready?'#8ecab5':'#d5e0ec',fill:'#fff','stroke-dasharray':n.boundary||n.unresolved?'4 3':'none'}));
+   g.append(svgEl('rect',{x:p.x,y:p.y,width:245,height:150,rx:7,stroke:n.ready?'#8ecab5':'#d5e0ec',fill:'#fff','stroke-dasharray':n.boundary||n.unresolved?'4 3':'none'}));
    g.append(svgEl('text',{x:p.x+10,y:p.y+19,'font-weight':600},String(info.identity).slice(0,34)),svgEl('text',{x:p.x+10,y:p.y+38},String(info.title).slice(0,34)),svgEl('text',{x:p.x+10,y:p.y+57,'font-size':10},String(info.association).slice(0,40)),svgEl('text',{x:p.x+10,y:p.y+75,'font-size':10},`${info.kind}${n.boundary?' · context':''}${n.unresolved?' · unresolved':''}`));
    const badge=svgEl('g',{class:'graph-marker marker-'+marker.kind,'data-marker':marker.kind});badge.append(svgEl('rect',{x:p.x+9,y:p.y+84,width:225,height:22,rx:4}),svgEl('text',{x:p.x+16,y:p.y+99,'font-size':11,'font-weight':600},marker.label));g.append(badge);
-   const blocked=issue&&getDelivery(issue).blocked,bottom=svgEl('g',blocked?{class:'node-blocked'}:{});if(blocked)bottom.append(svgEl('rect',{x:p.x+9,y:p.y+111,width:225,height:18,rx:3}));bottom.append(svgEl('text',{x:p.x+13,y:p.y+123,'font-size':10},`${blocked?'! Blocked · ':''}Unmet prerequisites: ${unmet}`));g.append(bottom);if(issue){g.setAttribute('role','button');g.setAttribute('tabindex','0');g.setAttribute('aria-label','Open '+issue.key+' details');g.addEventListener('click',()=>openIssue(issue.key));g.addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();openIssue(issue.key);}});}svg.append(g);
+   const blocked=issue&&getDelivery(issue).blocked,bottom=svgEl('g',blocked?{class:'node-blocked'}:{});if(blocked)bottom.append(svgEl('rect',{x:p.x+9,y:p.y+111,width:225,height:18,rx:3}));bottom.append(svgEl('text',{x:p.x+13,y:p.y+123,'font-size':10},`${blocked?'! Blocked · ':''}Unmet prerequisites: ${unmet}`));g.append(bottom);const descendants=membershipDescendants(n.id).size;if(descendants){const subtree=svgEl('g',{class:'node-subtree-button',role:'button',tabindex:'0','aria-label':`Show ${descendants} linked descendant${descendants===1?'':'s'} of ${info.identity}`});subtree.append(svgEl('title',{},'Show this record as a parent with all linked child work in depth'),svgEl('rect',{x:p.x+9,y:p.y+129,width:225,height:16,rx:3}),svgEl('text',{x:p.x+15,y:p.y+141,'font-size':10,'font-weight':600},`⤵ Show ${descendants} linked descendant${descendants===1?'':'s'}`));const open=event=>{event.stopPropagation();showSubtree(n.id);};subtree.addEventListener('click',open);subtree.addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();open(event);}});g.append(subtree);}if(issue){g.setAttribute('role','button');g.setAttribute('tabindex','0');g.setAttribute('aria-label','Open '+issue.key+' details');g.addEventListener('click',()=>openIssue(issue.key));g.addEventListener('keydown',event=>{if(['Enter',' '].includes(event.key)){event.preventDefault();openIssue(issue.key);}});}svg.append(g);
   });area.append(svg);
  }
  const byId=new Map(view.nodes.map(n=>[n.id,n])),cycles=cycleEdges(view.edges);
@@ -427,14 +438,14 @@ function render(){if(!data)return;const s=selection();renderMetrics(s);renderPro
 function selectValue(id,value){const select=$(id);if(value&&![...select.options].some(option=>option.value===value)){const option=el('option','Unavailable: '+value);option.value=value;select.append(option);}select.value=value;}
 function populate(id,items,key,label,all){const select=$(id),previous=select.value;select.replaceChildren();const option=el('option',all);option.value='';select.append(option);items.forEach(item=>{const o=el('option',item[label]);o.value=item[key];select.append(o);});selectValue(id,previous);}
 async function load(){const ticket=++request;$('error').hidden=true;$('refresh').disabled=true;const params=new URLSearchParams({mode:$('demo').checked?'demo':'live'});['low','likely','high','review_multiplier'].forEach(k=>params.set(k,$(k).value));try{const response=await fetch('/api/dashboard?'+params);const payload=await response.json();if(!response.ok)throw new Error(payload.error?.message||'Unable to read mailbox');if(ticket!==request)return;data=payload;populate('project',data.projects,'id','name','All projects');populateWorkFilter();captureComparison(selection());render();if($('issue-detail').open)renderIssueDetail($('issue-detail').dataset.issueKey);}catch(e){if(ticket!==request)return;$('error').textContent=`Could not refresh: ${e.message}. ${data?'Last successful snapshot is still displayed.':'Check the mailbox mount and try again.'}`;$('error').hidden=false;}finally{if(ticket===request)$('refresh').disabled=false;}}
-function restoreUrl(){const params=new URLSearchParams(location.search);urlStateErrors=[];selectValue('project',params.get('project')||'');selectValue('epic',params.get('epic')||'');selectValue('team',params.get('team')||'');$('search').value=params.get('search')||'';focusId=params.get('focus')||'';const mode=params.get('mode')||'live';$('demo').checked=mode==='demo';if(!['live','demo'].includes(mode))urlStateErrors.push('Mode: '+mode);const graph=params.get('graph')||'execution';if(!['hierarchy','execution'].includes(graph))urlStateErrors.push('Graph mode: '+graph);$('graph-hierarchy').setAttribute('aria-pressed',String(graph==='hierarchy'));$('graph-execution').setAttribute('aria-pressed',String(graph!=='hierarchy'));$('graph-local-work').checked=params.get('local')==='all';}
-function writeUrl(view){const url=new URL(location.href),values={project:$('project').value,epic:$('epic').value,team:$('team').value,search:$('search').value,focus:focusId,mode:$('demo').checked?'demo':'live',graph:$('graph-hierarchy').getAttribute('aria-pressed')==='true'?'hierarchy':'execution',local:$('graph-local-work').checked?'all':''};Object.entries(values).forEach(([key,value])=>{if(value)url.searchParams.set(key,value);else url.searchParams.delete(key);});if(view)url.hash=view;urlStateErrors=[];if(url.href!==location.href)history.pushState(null,'',url);}
+function restoreUrl(){const params=new URLSearchParams(location.search);urlStateErrors=[];selectValue('project',params.get('project')||'');selectValue('epic',params.get('epic')||'');selectValue('team',params.get('team')||'');$('search').value=params.get('search')||'';focusId=params.get('focus')||'';focusSubtree=Boolean(focusId)&&params.get('subtree')==='1';const mode=params.get('mode')||'live';$('demo').checked=mode==='demo';if(!['live','demo'].includes(mode))urlStateErrors.push('Mode: '+mode);const graph=params.get('graph')||'execution';if(!['hierarchy','execution'].includes(graph))urlStateErrors.push('Graph mode: '+graph);$('graph-hierarchy').setAttribute('aria-pressed',String(graph==='hierarchy'));$('graph-execution').setAttribute('aria-pressed',String(graph!=='hierarchy'));$('graph-local-work').checked=params.get('local')==='all';$('hide-completed').checked=params.get('completed')!=='all';}
+function writeUrl(view){const url=new URL(location.href),values={project:$('project').value,epic:$('epic').value,team:$('team').value,search:$('search').value,focus:focusId,subtree:focusId&&focusSubtree?'1':'',mode:$('demo').checked?'demo':'live',graph:$('graph-hierarchy').getAttribute('aria-pressed')==='true'?'hierarchy':'execution',local:$('graph-local-work').checked?'all':'',completed:$('hide-completed').checked?'':'all'};Object.entries(values).forEach(([key,value])=>{if(value)url.searchParams.set(key,value);else url.searchParams.delete(key);});if(view)url.hash=view;urlStateErrors=[];if(url.href!==location.href)history.pushState(null,'',url);}
 function scenario(){const count=Number($('scenario-count').value);const model=data?.estimate_method;if(!model)return;$('scenario-result').textContent=Number.isFinite(count)&&count>=0&&count<=10000?range(Object.fromEntries(['low','likely','high'].map(k=>[k,count*model[k]*model.review_multiplier]))):'Enter a count from 0 to 10,000';}
 $('graph-local-work').addEventListener('change',()=>{writeUrl();if(data)renderMap(selection());});
 ['graph-hierarchy','graph-execution'].forEach(id=>$(id).addEventListener('click',()=>{['graph-hierarchy','graph-execution'].forEach(other=>$(other).setAttribute('aria-pressed',String(id===other)));writeUrl();if(data)renderMap(selection());}));
-$('clear-focus').addEventListener('click',()=>{focusId='';writeUrl();render();});
+$('clear-focus').addEventListener('click',()=>{focusId='';focusSubtree=false;writeUrl();render();});
 $('close-detail').addEventListener('click',closeIssue);$('issue-detail').addEventListener('cancel',event=>{event.preventDefault();closeIssue();});
-$('refresh').addEventListener('click',load);$('demo').addEventListener('change',()=>{writeUrl();load();});['team','project','epic'].forEach(id=>$(id).addEventListener('change',()=>{writeUrl();render();}));$('search').addEventListener('input',()=>{writeUrl();render();});$('model-form').addEventListener('submit',e=>{e.preventDefault();load();});$('scenario-count').addEventListener('input',scenario);restoreUrl();load();
+$('refresh').addEventListener('click',load);$('demo').addEventListener('change',()=>{writeUrl();load();});['team','project','epic','hide-completed'].forEach(id=>$(id).addEventListener('change',()=>{writeUrl();render();}));$('search').addEventListener('input',()=>{writeUrl();render();});$('model-form').addEventListener('submit',e=>{e.preventDefault();load();});$('scenario-count').addEventListener('input',scenario);restoreUrl();load();
 
 function syncThemeButton(){const dark=document.documentElement.dataset.theme!=='light';$('theme-toggle').textContent=dark?'☀ Light theme':'☾ Dark theme';$('theme-toggle').setAttribute('aria-label',dark?'Switch to light theme':'Switch to dark theme');}
 $('theme-toggle').addEventListener('click',()=>{const next=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=next;try{localStorage.setItem('mailbox-theme',next);}catch(_){}syncThemeButton();});syncThemeButton();
