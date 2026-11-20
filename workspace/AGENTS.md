@@ -25,6 +25,8 @@ Use the `mailbox-orchestrator` skill to coordinate the registered project sessio
 
 Jira is read-only for the orchestrator and all delegated project work. Do not post comments or change statuses, issues, estimates or worklogs. Track Epic progress locally under `epics/<EPIC-KEY>/`. This remains in force until the user explicitly changes it.
 
+Explicit user instruction (2026-11-20): the orchestrator alone may make exactly three Jira updates per issue, through `.agents/skills/mailbox-orchestrator/scripts/jira_sync.py`: on execution start, assign the issue to the user running the orchestrator and move it to In Progress; on PR opened, move it to Development Peer Review where its work type has that status; on verified complete, move it to Closed. A Story moves to In Progress with its first started sub-task and to Closed only when all its sub-tasks are verified. Everything else stays read-only: no comments, estimates, worklogs, issue creation or other field edits. Project workers and their loops remain fully read-only.
+
 ## Mandatory execution workflow
 
 Every project task must be executed through that project's actual `<prefix>.loop` skill and its applicable protocol, including analysis, implementation, tests, reviews, fixes and verification. No ad hoc execution or small-task bypass is allowed. Read the project's rulebook, discover the exact loop skill, and record its name/path and protocol evidence in the mailbox task. Missing or ambiguous loop skills block execution until resolved. The orchestrator verifies required loop gates before accepting completion. Preserve the user's Jira read-only restriction even where a loop normally writes to Jira, and propagate both requirements to delegates.

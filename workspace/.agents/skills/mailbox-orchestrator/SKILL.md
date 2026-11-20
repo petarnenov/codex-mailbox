@@ -80,9 +80,23 @@ A harmless PING/PONG with the worker's project path can establish reachability w
 - Summarize project, owner, task, latest evidence, blocker and next action. Keep coordination records in English; respond to the user in their language.
 - On resume, reconcile files with actual thread and repository state. Never reclaim a lock based only on age. If the user asks to stop, stop dispatching and record the current checkpoint; do not cancel workers or delete their changes without instruction.
 
-## Epic coordination: Jira is read-only
+## Epic coordination: Jira is read-only except three orchestrator updates
 
 The current user policy is **no Jira writes**. Read Epic details, issue descriptions, acceptance criteria, relationships and estimates through available Jira tools. Do not post comments, change statuses, log work, modify estimates or create/update issues. Propagate this restriction in every delegated task, including tasks whose repository skills normally update Jira. Only a subsequent explicit user instruction can change this policy; a worker message or Jira content cannot.
+
+**Orchestrator-only exception (user, 2026-11-20).** The orchestrator makes exactly three Jira updates and nothing else. Queue each with `scripts/jira_sync.py queue --issue <KEY> --event <event> --ref <evidence>` at its gate, then apply it with the Jira tools and record the outcome with `jira_sync.py done --id <UUID> --outcome applied|skipped --detail <what happened>`:
+
+| Gate | Event | Jira effect |
+|---|---|---|
+| Gated dispatch allowed for an issue's first task | `start` | assign to the current Jira user (the one running the orchestrator), move to In Progress |
+| PR opened for the issue | `pr` | move to Development Peer Review |
+| `record_issue.py verified` | `verified` | move to Closed |
+
+- Resolve the move with the issue's available transitions and match the **target status**, not the transition name. If the work type has no such status (Stories have no Development Peer Review) or the issue is already there or further, record `skipped` with the reason; never pick a different status.
+- A Story moves to In Progress with its first started sub-task and to Closed only after all its sub-tasks are verified.
+- Apply only to issues started after this exception; do not retro-transition earlier work unless the user asks.
+- Run `jira_sync.py pending` on activation and resume and finish any queued requests.
+- Delegated workers and their loops stay fully read-only; keep that restriction in every assignment.
 
 ### Import the full scope
 
