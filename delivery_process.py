@@ -323,7 +323,8 @@ def project_delivery(issues, tasks, raw_issues, graph, warnings):
             blockers.update(plain(value) for value in task['blockers'])
             if task['status'] == 'blocked':
                 blockers.add('Local task ' + task['id'] + ' is blocked.')
-        blockers.update(_dependency_blockers(graph, ['issue:' + issue['key']] + ['task:' + task['id'] for task in linked]))
+        if not issue['verified']:  # Prerequisites gate execution; a verified issue has nothing left to execute.
+            blockers.update(_dependency_blockers(graph, ['issue:' + issue['key']] + ['task:' + task['id'] for task in linked]))
         # A task shared with a dependent issue must not list this issue as its own prerequisite.
         blockers.discard('Unmet prerequisite: issue:' + issue['key'])
         blockers.discard('')

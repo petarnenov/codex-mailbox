@@ -93,6 +93,16 @@ class DeliveryProcessTests(Fixture):
                        [{'key': 'C', 'task_ids': ['t'], 'depends_on': ['A'], 'projects': ['p']}])['delivery']
         self.assertNotIn('Unmet prerequisite: issue:A', d['blockers'])
 
+    def test_verified_issue_is_not_blocked_by_an_unverified_prerequisite(self):
+        issue = self.issue({'local_status': 'verified_done', 'verification': 'passed', 'evidence': ['proof'],
+                            'depends_on': ['B']}, [{'key': 'B', 'local_status': 'in_progress'}])
+        self.assertTrue(issue['verified'])
+        self.assertFalse(issue['delivery']['blocked'])
+
+    def test_unverified_issue_stays_blocked_by_an_unverified_prerequisite(self):
+        d = self.issue({'depends_on': ['B']}, [{'key': 'B', 'local_status': 'in_progress'}])['delivery']
+        self.assertIn('Unmet prerequisite: issue:B', d['blockers'])
+
     def test_criterion_pass_requires_own_nonblank_evidence(self):
         d = self.issue({'delivery': {'criteria': [
             {'text': 'First', 'status': 'passed', 'evidence': []},
