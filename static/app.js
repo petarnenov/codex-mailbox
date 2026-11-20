@@ -25,22 +25,24 @@ const openTaskStatuses=['pending','in_progress','blocked'];
 function isOpenFreeTextTask(record) {return record.mapping_kind==='unmapped'&&openTaskStatuses.includes(record.status);}
 function freeTextProcessGroup(task) {return task.status==='blocked'||(task.blockers||[]).length?'blocked':task.status==='in_progress'?'now':'next';}
 const settledCompletionMinutes=5;
-function hasDependents(taskId) {const id='task:'+taskId;return (data.graph?.edges||[]).some(e=>e.kind==='requires'&&e.from===id);}
-function completedLongerThan(task,minutes,now=Date.now()) {const at=Date.parse(task.updated_at||'');return !Number.isFinite(at)||now-at>minutes*60000;}
-function isSettledCompletedTask(task) {return task.evidenced===true&&!hasDependents(task.id)&&completedLongerThan(task,settledCompletionMinutes);}
+function hasDependents(nodeId) {return (data.graph?.edges||[]).some(e=>e.kind==='requires'&&e.from===nodeId);}
+function completedLongerThan(record,minutes,now=Date.now()) {const at=Date.parse(record.verified_at||record.updated_at||'');return !Number.isFinite(at)||now-at>minutes*60000;}
+function isSettledCompletedTask(task) {return task.evidenced===true&&!hasDependents('task:'+task.id)&&completedLongerThan(task,settledCompletionMinutes);}
+function isSettledCompletedIssue(issue) {return issue.verified===true&&!hasDependents('issue:'+issue.key)&&completedLongerThan(issue,settledCompletionMinutes);}
 function matchesTeam(record,team) { const teams=record.teams||[];return !team||(team==='unassigned'?teams.length===0:teams.includes(team)); }
 function selection() {
  const p=$('project').value,e=$('epic').value,team=$('team').value,q=$('search').value.trim().toLowerCase(),hideCompleted=$('hide-completed').checked;
  const taskId=e.startsWith('task:')?e.slice(5):'',epic=taskId?'':e;
  const invalid=[...urlStateErrors];if(p&&!data.projects.some(x=>x.id===p))invalid.push('Project: '+p);if(epic&&!data.epics.some(x=>x.key===epic))invalid.push('Epic: '+epic);if(taskId&&!data.tasks.some(t=>t.id===taskId))invalid.push('Task: '+taskId);if(!['','BE','FE','QA','unassigned'].includes(team))invalid.push('Team: '+team);
  const found=i=>!q||(i.key+' '+i.title).toLowerCase().includes(q);
- const issues=invalid.length?[]:data.issues.filter(i=>(!p||i.projects.includes(p))&&(!epic||i.epic_keys.includes(epic))&&(!taskId||i.task_ids.includes(taskId))&&matchesTeam(i,team)&&found(i));
+ const scopedIssues=invalid.length?[]:data.issues.filter(i=>(!p||i.projects.includes(p))&&(!epic||i.epic_keys.includes(epic))&&(!taskId||i.task_ids.includes(taskId))&&matchesTeam(i,team)&&found(i));
+ const issues=scopedIssues.filter(i=>!(hideCompleted&&isSettledCompletedIssue(i)));
  const tasks=invalid.length?[]:data.tasks.filter(t=>(!p||t.project===p)&&(!epic||(t.epic_keys||[t.epic_key]).includes(epic))&&(!taskId||t.id===taskId)&&matchesTeam(t,team)&&(!q||(t.id+' '+t.title+' '+(t.issue_keys||[]).join(' ')+' '+(t.epic_keys||[]).join(' ')).toLowerCase().includes(q)||issues.some(i=>i.task_ids.includes(t.id)))&&!(hideCompleted&&isSettledCompletedTask(t)));
  const reported=invalid.length||q||taskId?[]:data.reported_statistics.filter(r=>(!p||!r.project||r.project===p)&&(!epic||!r.epic||r.epic===epic)&&(!team||((r.teams||[]).length>0&&matchesTeam(r,team))));
  const epics=invalid.length?[]:data.epics.filter(x=>(!epic||x.key===epic)&&(!(p||team||q||taskId)||issues.some(i=>i.epic_keys.includes(x.key))||tasks.some(t=>(t.epic_keys||[t.epic_key]).includes(x.key))||reported.some(r=>r.epic===x.key&&(!p||r.project===p))));
  const projects=invalid.length?[]:data.projects.filter(x=>(!p||x.id===p)&&(!team||matchesTeam(x,team)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id))&&(!(e||q)||issues.some(i=>i.projects.includes(x.id))||tasks.some(t=>t.project===x.id)||reported.some(r=>r.project===x.id&&r.epic===epic)));
  const complete=!invalid.length&&!taskId&&(epic?data.epics.some(x=>x.key===epic)&&data.epics.filter(x=>x.key===epic).every(x=>x.scope_complete):data.totals.scope_complete);
- return {p,e:epic,taskId,team,q,hideCompleted,invalid,issues,tasks,epics,projects,reported,totals:sumMetrics(issues,complete)};
+ return {p,e:epic,taskId,team,q,hideCompleted,invalid,issues,tasks,epics,projects,reported,totals:sumMetrics(scopedIssues,complete)};
 }
 function taskShortLabel(task) {const words=String(task.short_title||task.title||task.id).trim().split(/\s+/);return words.length>4?words.slice(0,4).join(' ')+'…':words.join(' ');}
 function populateWorkFilter() {

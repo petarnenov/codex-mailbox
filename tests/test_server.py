@@ -68,6 +68,11 @@ class DashboardBuildTests(Fixture):
         self.assertEqual(100, data['totals']['percent'])
         self.assertTrue(data['issues'][0]['verified'])
 
+    def test_issue_exposes_verification_time_for_the_completed_filter(self):
+        self.epic('E', ['A-1'], True, [{'key': 'A-1', 'local_status': 'verified_done', 'evidence': ['url'],
+                                        'verification': {'status': 'passed', 'verified_at': '2026-11-20T18:00:00Z'}}])
+        self.assertEqual('2026-11-20T18:00:00Z', server.build_dashboard(self.root, MODEL)['issues'][0]['verified_at'])
+
     def test_verification_requires_all_linked_tasks_done_and_evidenced(self):
         self.put('tasks/p/T1.json', {'id': 'T1', 'status': 'done', 'evidence': ['proof']})
         self.put('tasks/p/T2.json', {'id': 'T2', 'status': 'done'})

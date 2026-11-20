@@ -323,6 +323,7 @@ def build_dashboard(root, model=None, mode='live'):
                       'projects': pids, 'local_status': status, 'recorded_local_status': item.get('local_status', 'pending'),
                       'recorded_verification_reason': item.get('verification', {}).get('reason', '') if isinstance(item.get('verification'), dict) else '',
                       'sources': strings(item.get('_source')), 'updated_at': item.get('updated_at'),
+                      'verified_at': item.get('verification', {}).get('verified_at') if isinstance(item.get('verification'), dict) else None,
                       'evidence': evidence_refs(item),
                       'source_status': str(source_status), 'verified': verified,
                       'dependencies': strings(item.get('depends_on', item.get('dependencies'))), 'task_ids': linked,
