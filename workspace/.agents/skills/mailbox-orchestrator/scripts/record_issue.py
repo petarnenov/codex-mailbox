@@ -9,6 +9,11 @@ The dashboard counts an issue as verified only when `local_status` is
 `verified_done`, `verification.status` is `passed` and `evidence` is non-empty.
 It draws execution prerequisites only from `depends_on`; free-text blockers such
 as "depends on GEO-1" create no graph edge, so unmet prerequisites show as zero.
+
+`verified` is refused while any linked local task (listed in the issue's
+`task_ids`/`local_task_ids` or naming the issue in `issue_key`/`issue_keys`) is
+not `done` with evidence or still holds its `.lock` directory. The dashboard
+applies the same rule, so recording earlier would show the issue as unfinished.
 """
 import argparse
 import json
@@ -49,6 +54,50 @@ def set_verified(issue, evidence, verifier, now):
     issue['updated_at'] = now
 
 
+def as_list(value):
+    if isinstance(value, str):
+        return [value]
+    return [item for item in value or [] if isinstance(item, str)]
+
+
+def has_evidence(task):
+    return bool(task.get('evidence') or task.get('acceptance_criterion_evidence')
+                or task.get('acceptance_criteria_evidence'))
+
+
+def unfinished_linked_tasks(root, issue):
+    """Return why each linked local task blocks verification of the issue."""
+    key = issue['key']
+    linked = set(as_list(issue.get('task_ids')) + as_list(issue.get('local_task_ids')))
+    tasks = {}
+    for path in sorted((root / 'tasks').glob('*/*.json')):
+        task = json.loads(path.read_text())
+        task_id = task.get('id', path.stem)
+        tasks[task_id] = (path, task)
+        if key in as_list(task.get('issue_key')) + as_list(task.get('issue_keys')):
+            linked.add(task_id)
+    problems = []
+    for task_id in sorted(linked):
+        if task_id not in tasks:
+            problems.append(f'{task_id}: task record missing')
+            continue
+        path, task = tasks[task_id]
+        if task.get('status') != 'done':
+            problems.append(f'{task_id}: status {task.get("status")!r}, expected done')
+        elif not has_evidence(task):
+            problems.append(f'{task_id}: done without evidence')
+        if path.with_suffix('.lock').exists():
+            problems.append(f'{task_id}: lock still held')
+    return problems
+
+
+def require_finished_tasks(root, issue):
+    problems = unfinished_linked_tasks(root, issue)
+    if problems:
+        raise ValueError(f'{issue["key"]} cannot be verified until its owners close linked tasks: '
+                         + '; '.join(problems))
+
+
 def record(root, epic, key, apply):
     path = issues_path(root, epic)
     document = json.loads(path.read_text())
@@ -74,7 +123,10 @@ def main(argv=None):
     if args.command == 'depends-on':
         record(args.root, args.epic, args.issue, lambda issue: set_prerequisites(issue, args.prerequisites, now))
     else:
-        record(args.root, args.epic, args.issue, lambda issue: set_verified(issue, args.evidence, args.verifier, now))
+        def verify(issue):
+            require_finished_tasks(args.root, issue)
+            set_verified(issue, args.evidence, args.verifier, now)
+        record(args.root, args.epic, args.issue, verify)
     print(json.dumps({'epic': args.epic, 'issue': args.issue, 'recorded': args.command}))
 
 

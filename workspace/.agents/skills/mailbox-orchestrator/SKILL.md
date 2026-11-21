@@ -76,6 +76,7 @@ A harmless PING/PONG with the worker's project path can establish reachability w
 ## Verify, report and resume
 
 - Distinguish queued, delivered, acknowledged, working, blocked and verified complete. A worker saying done is evidence to inspect, not automatic acceptance.
+- Every post-merge verification request tells the worker to close its own task record in the same step: `status: done`, completion evidence (merge commit, integrated verification, decisions, loop run log) and release of its `.lock`. `record_issue.py verified` refuses an issue while any linked task is open, lacks evidence or is locked; on refusal, ask the owner to close the listed tasks instead of editing them yourself.
 - Check each task's acceptance criteria against its artifacts and test results; check cross-project API contracts and dependency outcomes before declaring the overall objective complete. Request fixes from the owning worker when evidence is missing.
 - Summarize project, owner, task, latest evidence, blocker and next action. Keep coordination records in English; respond to the user in their language.
 - On resume, reconcile files with actual thread and repository state. Never reclaim a lock based only on age. If the user asks to stop, stop dispatching and record the current checkpoint; do not cancel workers or delete their changes without instruction.
